@@ -1,51 +1,32 @@
 import {
   any,
   either,
-  lazy,
-  map,
-  Parser,
-  regex,
-  seq,
-  str,
-  peekAnd,
-  sepBy1,
   keepNonNull,
-  sepBy,
-  skip1,
+  lazy,
   many1,
-  seqNonNull,
+  map,
   not,
+  Parser,
   peek,
-} from "https://deno.land/x/combine@v0.0.2/mod.ts";
-import { AsteriskToken } from "./ast/AsteriskToken.ts";
+  peekAnd,
+  regex,
+  sepBy,
+  sepBy1,
+  seq,
+  seqNonNull,
+  skip1,
+  str,
+} from "https://deno.land/x/combine@v0.0.9/mod.ts";
 import { BinaryExpression } from "./ast/BinaryExpression.ts";
 import { CallExpression } from "./ast/CallExpression.ts";
 import { ConditionalExpression } from "./ast/ConditionalExpression.ts";
 import { Identifier } from "./ast/Identifier.ts";
-import { MinusToken } from "./ast/MinusToken.ts";
 import { Node } from "./ast/Node.ts";
-import { PercentToken } from "./ast/PercentToken.ts";
-import { PlusEqualsToken } from "./ast/PlusEqualsToken.ts";
-import { PlusToken } from "./ast/PlusToken.ts";
 import { PropertyAccessExpression } from "./ast/PropertyAccessExpression.ts";
-import { SlashToken } from "./ast/SlashToken.ts";
 import { comma, doubleColon, questionMark } from "./atom.ts";
 import { terminated } from "./combinators.ts";
 import { paren } from "./common.ts";
-/* import {
-  breakKeyword,
-  continueKeyword,
-  elseKeyword,
-  fnKeyword,
-  forKeyword,
-  ifKeyword,
-  letKeyword,
-  returnKeyword,
-} from "./keyword.ts"; */
-import {
-  listLiteral,
-  literal /* , boolLiteral, nullLiteral */,
-} from "./literal.ts";
+import { listLiteral, literal } from "./literal.ts";
 import {
   divOp,
   logicalAnd,
@@ -58,25 +39,12 @@ import {
   relOperator,
 } from "./operator.ts";
 
-/* const reserved = any<any>(
-  boolLiteral,
-  nullLiteral,
-  elseKeyword,
-  forKeyword,
-  fnKeyword,
-  ifKeyword,
-  letKeyword,
-  returnKeyword,
-  breakKeyword,
-  continueKeyword
-); */
-
 const identRegex =
   /(?!true|false|null|if|else|for|function|let|return)([_a-zA-Z][_a-zA-Z0-9]*)/;
 
 const ident = map(
   terminated(regex(identRegex, "Expected identifier")),
-  (...args) => new Identifier(...args)
+  (...args) => new Identifier(...args),
 );
 
 const unary = (): Parser<Node> =>
@@ -87,9 +55,9 @@ const unary = (): Parser<Node> =>
       any(
         literal,
         ident,
-        peekAnd(seq(ident, either(str("("), str("."))), lazy(methodCall))
-      )
-    )
+        peekAnd(seq(ident, either(str("("), str("."))), lazy(methodCall)),
+      ),
+    ),
   );
 
 const propertyAccessExpression = map(
@@ -97,14 +65,14 @@ const propertyAccessExpression = map(
   (v, ...rest) =>
     new PropertyAccessExpression(
       v.filter((m) => m instanceof Identifier),
-      ...rest
-    )
+      ...rest,
+    ),
 );
 
 const memberAccess = () => {
-    // maybe `furthest`
-    return any(propertyAccessExpression, unary());
-}
+  // maybe `furthest`
+  return any(propertyAccessExpression, unary());
+};
 
 const methodArguments = (): Parser<Node[]> =>
   keepNonNull(
@@ -112,10 +80,10 @@ const methodArguments = (): Parser<Node[]> =>
       any(
         peekAnd(seq(ident, either(str("("), str("."))), lazy(methodCall)),
         unary(),
-        lazy(exp)
+        lazy(exp),
       ),
-      skip1(comma)
-    )
+      skip1(comma),
+    ),
   ) as Parser<Node[]>;
 
 const methodCall = () =>
@@ -124,38 +92,38 @@ const methodCall = () =>
       map(
         seqNonNull<Node<unknown> | Node<unknown>[]>(
           memberAccess(),
-          peekAnd(str("("), paren(methodArguments()))
+          peekAnd(str("("), paren(methodArguments())),
         ),
-        (v, ...rest) => new CallExpression(v, ...rest)
+        (v, ...rest) => new CallExpression(v, ...rest),
       ),
-      memberAccess()
-    )
+      memberAccess(),
+    ),
   );
 
 const factor = () =>
-  any<Node<unknown>>(
+  any(
     methodCall(),
     peekAnd(
       terminated(str("(")),
       seqNonNull(
         skip1(terminated(str("("))),
         lazy(exp),
-        skip1(terminated(str(")")))
-      )
-    ) as unknown as Parser<Node<unknown>>
+        skip1(terminated(str(")"))),
+      ),
+    ),
   );
 
 const term = () => {
   const binaryLeft = many1(
     seq(
-      any<AsteriskToken | SlashToken | PercentToken>(mulOp, divOp, modOp),
-      factor()
-    )
+      any(mulOp, divOp, modOp),
+      factor(),
+    ),
   );
 
   const binary = map(
     seq(factor(), binaryLeft),
-    (v, ...rest) => new BinaryExpression(v, ...rest)
+    (v, ...rest) => new BinaryExpression(v, ...rest),
   );
 
   const justFactor = map(seq(factor(), peek(not(binaryLeft))), ([f]) => f);
@@ -165,18 +133,18 @@ const term = () => {
 export const arith = () => {
   const binaryLeft = many1(
     seq(
-      any<PlusToken | MinusToken | PlusEqualsToken>(
+      any(
         plusEq,
         plusOp,
         minusOp,
       ),
-      term()
-    )
+      term(),
+    ),
   );
 
   const binary = map(
     seq(term(), binaryLeft),
-    (v, ...rest) => new BinaryExpression(v, ...rest)
+    (v, ...rest) => new BinaryExpression(v, ...rest),
   );
 
   const justTerm = map(seq(term(), peek(not(binaryLeft))), ([t]) => t);
@@ -187,7 +155,7 @@ const relation = () => {
   const binaryLeft = many1(seq(relOperator, arith()));
   const binary = map(
     seq(arith(), binaryLeft),
-    (v, ...rest) => new BinaryExpression(v, ...rest)
+    (v, ...rest) => new BinaryExpression(v, ...rest),
   );
   const justArith = map(seq(arith(), peek(not(binaryLeft))), ([ar]) => ar);
   return any(justArith, binary);
@@ -198,12 +166,12 @@ const booleanAnd = () => {
 
   const relational = map(
     seq(relation(), relationalLeft),
-    (v, ...rest) => new BinaryExpression(v, ...rest)
+    (v, ...rest) => new BinaryExpression(v, ...rest),
   );
 
   const justRelation = map(
     seq(relation(), peek(not(relationalLeft))),
-    ([rel]) => rel
+    ([rel]) => rel,
   );
 
   return any(justRelation, relational);
@@ -214,12 +182,12 @@ const booleanOr = () => {
 
   const logical = map(
     seq(booleanAnd(), logicalLeft),
-    (v, ...rest) => new BinaryExpression(v, ...rest)
+    (v, ...rest) => new BinaryExpression(v, ...rest),
   );
 
   const justBoolean = map(
     seq(booleanAnd(), peek(not(logicalLeft))),
-    ([and]) => and
+    ([and]) => and,
   );
 
   return any(justBoolean, logical);
@@ -228,22 +196,22 @@ const booleanOr = () => {
 // TODO: Support nested ternary expressions
 const ternary = () => {
   const conditionalLeft = many1(
-    seq(questionMark, booleanOr(), doubleColon, booleanOr())
+    seq(questionMark, booleanOr(), doubleColon, booleanOr()),
   );
 
   const conditional = map(
     seq(booleanOr(), conditionalLeft),
-    (...args) => new ConditionalExpression(...args)
+    (...args) => new ConditionalExpression(...args),
   );
 
   const justBoolean = map(
     seq(booleanOr(), peek(not(conditionalLeft))),
-    ([or]) => or
+    ([or]) => or,
   );
 
   return any(justBoolean, conditional);
 };
 
 export function exp(): Parser<Node<unknown>> {
-  return ternary();
+  return ternary() as unknown as Parser<Node<unknown>>;
 }

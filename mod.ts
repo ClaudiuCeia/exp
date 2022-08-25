@@ -1,1 +1,1 @@
-export { exp, arith } from "./src/exp.ts";
+export { arith, exp } from "./src/exp.ts";

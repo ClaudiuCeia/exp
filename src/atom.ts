@@ -1,4 +1,4 @@
-import { str } from "https://deno.land/x/combine@v0.0.2/mod.ts";
+import { str } from "https://deno.land/x/combine@v0.0.9/mod.ts";
 import { terminated } from "./combinators.ts";
 
 export const doubleColon = terminated(str(":"));

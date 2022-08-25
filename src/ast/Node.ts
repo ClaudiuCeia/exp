@@ -1,4 +1,4 @@
-import { Context } from "https://deno.land/x/combine@v0.0.2/mod.ts";
+import { Context } from "https://deno.land/x/combine@v0.0.9/mod.ts";
 import { SyntaxKind } from "./SyntaxKind.ts";
 
 export type NodeRange = {
@@ -11,7 +11,7 @@ export type TraversalCallbackMap = {
     node: Node,
     parent?: Node,
     key?: string,
-    index?: number
+    index?: number,
   ) => void;
 };
 
@@ -28,7 +28,12 @@ export abstract class Node<T = unknown> {
     locals: {},
   };
 
-  public constructor(value: unknown, before: Context, after: Context) {
+  public constructor(
+    value: unknown,
+    before: Context,
+    after: Context,
+    _measurement?: string,
+  ) {
     this.range = {
       start: before.index,
       end: after.index,

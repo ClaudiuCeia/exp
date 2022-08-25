@@ -11,7 +11,7 @@ export type BinaryExpressionValue<Left, Op, Right> = {
 export class BinaryExpression<
   Left = unknown,
   Op = unknown,
-  Right = unknown
+  Right = unknown,
 > extends Node<BinaryExpressionValue<Left, Op, Right>> {
   readonly kind = SyntaxKind.BinaryExpression;
 
@@ -37,7 +37,7 @@ export class BinaryExpression<
     return tuples.reduce(
       (
         acc: BinaryExpressionValue<unknown, unknown, unknown>,
-        [op, right]: [Node<unknown>, Node<unknown>]
+        [op, right]: [Node<unknown>, Node<unknown>],
       ) => {
         return {
           left: acc,
@@ -49,7 +49,7 @@ export class BinaryExpression<
         left,
         op: tuples[0][0],
         right: tuples[0][1],
-      }
+      },
     ).left;
   }
 }

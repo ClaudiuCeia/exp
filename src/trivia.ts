@@ -1,16 +1,16 @@
 import {
+  anyChar,
   either,
+  eol,
   manyTill,
+  map,
   oneOf,
+  peek,
+  peekAnd,
   space,
   str,
   surrounded,
-  anyChar,
-  peek,
-  peekAnd,
-  eol,
-  map,
-} from "https://deno.land/x/combine@v0.0.2/mod.ts";
+} from "https://deno.land/x/combine@v0.0.9/mod.ts";
 
 /**
  * SyntaxKind.Trivia
@@ -22,12 +22,13 @@ export const spaceTrivia = space();
 export const commentTrivia = either(
   surrounded(
     str("/*"),
-    map(manyTill(anyChar(), peek(str("*/"))), (v) =>
-      v.filter((m) => m !== null).join("")
+    map(
+      manyTill(anyChar(), peek(str("*/"))),
+      (v) => v.filter((m) => m !== null).join(""),
     ),
-    str("*/")
+    str("*/"),
   ),
-  peekAnd(str("//"), manyTill(anyChar(), eol()))
+  peekAnd(str("//"), manyTill(anyChar(), eol())),
 );
 
 export const trivia = oneOf(spaceTrivia, commentTrivia /* terminalTrivia */);

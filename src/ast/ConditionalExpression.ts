@@ -13,7 +13,7 @@ export class ConditionalExpression<Cond, Left, Right> extends Node<
   readonly kind = SyntaxKind.ConditionalExpression;
 
   protected parseValue(
-    v: unknown
+    v: unknown,
   ): ConditionalExpressionValue<Cond, Left, Right> {
     if (!Array.isArray(v) || v.length !== 2) {
       throw new Error();
