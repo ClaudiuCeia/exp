@@ -212,6 +212,68 @@ export const replCommand = buildCommand({
       await writeStdout("> ");
     };
 
+    const handleLine = async (
+      lineRaw: string,
+      opts: { promptAfter: boolean },
+    ): Promise<"continue" | "exit"> => {
+      const line = lineRaw.replace(/\r$/, "").trim();
+      if (line.length === 0) {
+        if (opts.promptAfter) await prompt();
+        return "continue";
+      }
+
+      if (line === ".exit") return "exit";
+      if (line === ".help") {
+        help();
+        if (opts.promptAfter) await prompt();
+        return "continue";
+      }
+      if (line === ".env") {
+        this.process.stdout.write(
+          env ? `${Object.keys(env).sort().join("\n")}\n` : "(empty)\n",
+        );
+        if (opts.promptAfter) await prompt();
+        return "continue";
+      }
+
+      if (line.startsWith(".load ")) {
+        const p = line.slice(".load ".length).trim();
+        if (!p) {
+          this.process.stdout.write("usage: .load <path>\n");
+          if (opts.promptAfter) await prompt();
+          return "continue";
+        }
+
+        try {
+          env = await loadEnvFromModule(p);
+          this.process.stdout.write(
+            `loaded env (${Object.keys(env).length} keys)\n`,
+          );
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          this.process.stdout.write(`${msg}\n`);
+        }
+
+        if (opts.promptAfter) await prompt();
+        return "continue";
+      }
+
+      const res = evaluateExpression(line, {
+        env,
+        throwOnError: false,
+        throwOnParseError: false,
+      });
+
+      if (!res.success) {
+        this.process.stdout.write(`${res.error.message}\n`);
+      } else {
+        this.process.stdout.write(formatValue(res.value, format));
+      }
+
+      if (opts.promptAfter) await prompt();
+      return "continue";
+    };
+
     await prompt();
 
     while (true) {
@@ -227,62 +289,15 @@ export const replCommand = buildCommand({
         const lineRaw = carry.slice(0, idx);
         carry = carry.slice(idx + 1);
 
-        const line = lineRaw.replace(/\r$/, "").trim();
-        if (line.length === 0) {
-          await prompt();
-          continue;
-        }
-
-        if (line === ".exit") return;
-        if (line === ".help") {
-          help();
-          await prompt();
-          continue;
-        }
-        if (line === ".env") {
-          this.process.stdout.write(
-            env ? `${Object.keys(env).sort().join("\n")}\n` : "(empty)\n",
-          );
-          await prompt();
-          continue;
-        }
-
-        if (line.startsWith(".load ")) {
-          const p = line.slice(".load ".length).trim();
-          if (!p) {
-            this.process.stdout.write("usage: .load <path>\n");
-            await prompt();
-            continue;
-          }
-
-          try {
-            env = await loadEnvFromModule(p);
-            this.process.stdout.write(
-              `loaded env (${Object.keys(env).length} keys)\n`,
-            );
-          } catch (e) {
-            const msg = e instanceof Error ? e.message : String(e);
-            this.process.stdout.write(`${msg}\n`);
-          }
-
-          await prompt();
-          continue;
-        }
-
-        const res = evaluateExpression(line, {
-          env,
-          throwOnError: false,
-          throwOnParseError: false,
-        });
-
-        if (!res.success) {
-          this.process.stdout.write(`${res.error.message}\n`);
-        } else {
-          this.process.stdout.write(formatValue(res.value, format));
-        }
-
-        await prompt();
+        const r = await handleLine(lineRaw, { promptAfter: true });
+        if (r === "exit") return;
       }
+    }
+
+    // If stdin ended without a trailing newline, process the final buffered line.
+    if (carry.length > 0) {
+      const r = await handleLine(carry, { promptAfter: false });
+      if (r === "exit") return;
     }
   },
   parameters: {
