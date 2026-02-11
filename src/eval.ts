@@ -263,7 +263,11 @@ const evalExpr = (expr: Expr, ctx: Ctx): EvalResult => {
         if (ctx.unknownIdentifier === "undefined") {
           return { success: true, value: undefined };
         }
-        return evalError(`unknown identifier '${expr.name}'`, expr.span, ctx.steps);
+        return evalError(
+          `unknown identifier '${expr.name}'`,
+          expr.span,
+          ctx.steps,
+        );
       case "array": {
         if (expr.elements.length > ctx.maxArrayElements) {
           return evalError("array literal too large", expr.span, ctx.steps);

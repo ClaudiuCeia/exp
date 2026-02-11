@@ -96,7 +96,9 @@ export const formatDiagnosticCaret = (
   diag: FormatDiagnosticCaretSource,
   opts: FormatCaretOptions = {},
 ): string => {
-  if (typeof diag.index === "number") return formatCaret(input, diag.index, opts);
+  if (typeof diag.index === "number") {
+    return formatCaret(input, diag.index, opts);
+  }
   if (diag.span) return formatSpanCaret(input, diag.span, opts);
   return formatCaret(input, 0, opts);
 };
@@ -151,9 +153,18 @@ export const formatDiagnosticReport = (
         const endInfo = findLineInfo(input, Math.max(span.start, span.end - 1));
 
         // Only render multi-span underline when the span stays on this line.
-        if (startInfo.lineIndex === info.lineIndex && endInfo.lineIndex === info.lineIndex) {
-          const rawPrefixStart = rawLine.slice(0, Math.max(0, startInfo.column - 1));
-          const rawPrefixEnd = rawLine.slice(0, Math.max(0, endInfo.column - 1));
+        if (
+          startInfo.lineIndex === info.lineIndex &&
+          endInfo.lineIndex === info.lineIndex
+        ) {
+          const rawPrefixStart = rawLine.slice(
+            0,
+            Math.max(0, startInfo.column - 1),
+          );
+          const rawPrefixEnd = rawLine.slice(
+            0,
+            Math.max(0, endInfo.column - 1),
+          );
           const startPos = expandTabs(rawPrefixStart, tabWidth).length;
           const endPos = expandTabs(rawPrefixEnd, tabWidth).length;
 
@@ -161,7 +172,9 @@ export const formatDiagnosticReport = (
           const hi = Math.max(startPos, endPos);
           const width = Math.max(1, hi - lo + 1);
 
-          const underline = `${gutter} | ${" ".repeat(lo)}╰${"─".repeat(Math.max(0, width - 2))}╯`;
+          const underline = `${gutter} | ${" ".repeat(lo)}╰${
+            "─".repeat(Math.max(0, width - 2))
+          }╯`;
 
           // Arrow originates from the center of the underline.
           const center = lo + Math.floor(width / 2);

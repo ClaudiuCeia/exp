@@ -271,11 +271,13 @@ export const replCommand = buildCommand({
 
       if (!res.success) {
         this.process.stdout.write(
-          `${formatDiagnosticReport(line, {
-            message: res.error.message,
-            index: res.error.index,
-            span: res.error.span,
-          })}\n`,
+          `${
+            formatDiagnosticReport(line, {
+              message: res.error.message,
+              index: res.error.index,
+              span: res.error.span,
+            })
+          }\n`,
         );
       } else {
         this.process.stdout.write(formatValue(res.value, format));

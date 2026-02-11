@@ -193,10 +193,10 @@ const ExpressionLang: ExprLang = createLanguage<ExprLang>({
     return map(
       seq(s.LogicalOr, many(seq(op, cut(s.Postfix, "expression after '|>'")))),
       ([first, rest]) => {
-      return rest.reduce(
-        (acc, [, rhs]) => mkPipedCall(acc.span.start, rhs, acc),
-        first,
-      );
+        return rest.reduce(
+          (acc, [, rhs]) => mkPipedCall(acc.span.start, rhs, acc),
+          first,
+        );
       },
     );
   },
@@ -266,7 +266,7 @@ const ExpressionLang: ExprLang = createLanguage<ExprLang>({
     const memberOp = map(
       seq(lx.symbol("."), cut(identSpan, "identifier after '.'")),
       ([, prop]) => {
-      return (obj: Expr): Expr => mkMember(obj, prop);
+        return (obj: Expr): Expr => mkMember(obj, prop);
       },
     );
 
@@ -278,7 +278,7 @@ const ExpressionLang: ExprLang = createLanguage<ExprLang>({
     const callOp = map(
       seq(lparen, args, cut(rparen, "closing ')'")),
       ([, args, end]) => {
-      return (callee: Expr): Expr => mkCall(callee, args, end);
+        return (callee: Expr): Expr => mkCall(callee, args, end);
       },
     );
 
@@ -355,13 +355,13 @@ const ExpressionLang: ExprLang = createLanguage<ExprLang>({
 
     return expecting(
       any(
-      arrayExpr,
-      boolExpr,
-      nullExpr,
-      numExpr,
-      strExpr,
-      parenExpr,
-      identExpr,
+        arrayExpr,
+        boolExpr,
+        nullExpr,
+        numExpr,
+        strExpr,
+        parenExpr,
+        identExpr,
       ),
       "expression",
     );

@@ -292,7 +292,7 @@ Deno.test("parseExpression reports conditional missing consequent with helpful m
   assertEquals(res.success, false);
   if (res.success) return;
 
-  assertStringIncludes(res.error.message, "expression after '?'" );
+  assertStringIncludes(res.error.message, "expression after '?'");
 });
 
 Deno.test("parseExpression reports member missing property name", () => {
@@ -308,5 +308,5 @@ Deno.test("parseExpression reports call missing closing paren", () => {
   assertEquals(res.success, false);
   if (res.success) return;
 
-  assertStringIncludes(res.error.message, "closing ')'" );
+  assertStringIncludes(res.error.message, "closing ')'");
 });
