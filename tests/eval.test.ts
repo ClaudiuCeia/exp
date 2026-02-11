@@ -46,6 +46,24 @@ Deno.test("evaluateExpression supports comparison operators", () => {
   assertEquals(res.value, true);
 });
 
+Deno.test("evaluateExpression does not coerce objects for == / !=", () => {
+  const res1 = evaluateExpression("obj == '[object Object]'", {
+    throwOnError: false,
+    env: { obj: {} },
+  });
+  assertEquals(res1.success, true);
+  if (!res1.success) return;
+  assertEquals(res1.value, false);
+
+  const res2 = evaluateExpression("xs == '1,2,3'", {
+    throwOnError: false,
+    env: { xs: [1, 2, 3] },
+  });
+  assertEquals(res2.success, true);
+  if (!res2.success) return;
+  assertEquals(res2.value, false);
+});
+
 Deno.test("evaluateExpression supports toNumber conversions", () => {
   const res1 = evaluateExpression("+true + +false + +null", {
     throwOnError: false,
@@ -125,6 +143,26 @@ Deno.test("evaluateExpression member access works on proto-null objects", () => 
   assertEquals(res.value, 1);
 });
 
+Deno.test("evaluateExpression does not expose inherited env properties", () => {
+  const res = evaluateExpression("toString", {
+    throwOnError: false,
+    env: {},
+  });
+  assertEquals(res.success, true);
+  if (!res.success) return;
+  assertEquals(res.value, undefined);
+});
+
+Deno.test("evaluateExpression does not expose inherited member properties", () => {
+  const res = evaluateExpression("obj.toString", {
+    throwOnError: false,
+    env: { obj: {} },
+  });
+  assertEquals(res.success, true);
+  if (!res.success) return;
+  assertEquals(res.value, undefined);
+});
+
 Deno.test("evaluateExpression returns undefined for missing identifiers", () => {
   const res = evaluateExpression("missing", { throwOnError: false });
   assertEquals(res.success, true);
@@ -197,6 +235,25 @@ Deno.test("evaluateExpression rejects unsupported function return values", () =>
   assertEquals(res.success, false);
   if (res.success) return;
   assertMatch(res.error.message, /unsupported value/);
+});
+
+Deno.test("evaluateExpression rejects unsupported env values", () => {
+  assertThrows(() => {
+    evaluateExpression("x", {
+      throwOnError: true,
+      env: { x: new Date() as unknown as RuntimeValue },
+      throwOnParseError: true,
+    });
+  });
+
+  const res = evaluateExpression("x", {
+    throwOnError: false,
+    env: { x: new Date() as unknown as RuntimeValue },
+    throwOnParseError: false,
+  });
+  assertEquals(res.success, false);
+  if (res.success) return;
+  assertMatch(res.error.message, /env\['x'\] is not a supported runtime value/);
 });
 
 Deno.test("evaluateExpression allows structured return values", () => {

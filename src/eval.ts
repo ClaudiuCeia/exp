@@ -93,8 +93,71 @@ const isRuntimeValue = (value: unknown): value is RuntimeValue => {
   return false;
 };
 
+const normalizeEnv = (
+  env: unknown,
+): { ok: true; env: Record<string, RuntimeValue> } | {
+  ok: false;
+  message: string;
+} => {
+  if (env === undefined) return { ok: true, env: {} };
+  if (!isPlainObject(env)) {
+    return {
+      ok: false,
+      message: "env must be a plain object (or proto-null object)",
+    };
+  }
+
+  for (const [k, v] of Object.entries(env)) {
+    if (!isRuntimeValue(v)) {
+      return {
+        ok: false,
+        message: `env['${k}'] is not a supported runtime value`,
+      };
+    }
+  }
+
+  return { ok: true, env: env as Record<string, RuntimeValue> };
+};
+
 const isTruthy = (v: RuntimeValue): boolean => {
   return !!v;
+};
+
+const isPrimitive = (v: RuntimeValue): v is RuntimePrimitive => {
+  return v === undefined || v === null || typeof v !== "object";
+};
+
+// JS-style loose equality, but with a crucial safety rule:
+// never coerce non-primitives (objects/arrays/functions) via ToPrimitive.
+// This avoids implicit method lookups/calls like `obj.toString()`.
+const looseEqualSafe = (a: RuntimeValue, b: RuntimeValue): boolean => {
+  // Fast path for identical values and identical references.
+  if (a === b) return true;
+
+  // If either side is a non-primitive (object/array/function), do not coerce.
+  // For objects, JS loose equality ends up as reference equality anyway, unless
+  // compared against a primitive (where ToPrimitive would kick in). We
+  // intentionally return false in those coercing cases.
+  if (!isPrimitive(a) || !isPrimitive(b)) return false;
+
+  // Nullish equality: `null == undefined`.
+  if (a == null && b == null) return true;
+  if (a == null || b == null) return false;
+
+  // Booleans coerce to numbers.
+  if (typeof a === "boolean") return looseEqualSafe(toNumber(a), b);
+  if (typeof b === "boolean") return looseEqualSafe(a, toNumber(b));
+
+  // String/number cross-coercion.
+  if (typeof a === "string" && typeof b === "number") {
+    return Number(a) == b;
+  }
+  if (typeof a === "number" && typeof b === "string") {
+    return a == Number(b);
+  }
+
+  // Remaining primitive pairs: strict equality is enough.
+  return a === b;
 };
 
 const toNumber = (v: RuntimeValue): number => {
@@ -126,9 +189,6 @@ const bump = (ctx: Ctx, span?: Span): EvalResult | null => {
   if (ctx.steps > ctx.maxSteps) {
     return evalError("evaluation budget exceeded", span, ctx.steps);
   }
-  if (ctx.depth > ctx.maxDepth) {
-    return evalError("evaluation recursion limit exceeded", span, ctx.steps);
-  }
   return null;
 };
 
@@ -143,6 +203,7 @@ const getMember = (obj: RuntimeValue, prop: string): RuntimeValue => {
   }
 
   if (isPlainObject(obj)) {
+    if (!Object.hasOwn(obj, prop)) return undefined;
     return (obj as Record<string, RuntimeValue>)[prop];
   }
 
@@ -153,36 +214,44 @@ const evalExpr = (expr: Expr, ctx: Ctx): EvalResult => {
   const budget = bump(ctx, expr.span);
   if (budget) return budget;
 
-  switch (expr.kind) {
-    case "number":
-    case "string":
-    case "boolean":
-      return { success: true, value: expr.value };
-    case "null":
-      return { success: true, value: null };
-    case "identifier":
-      return { success: true, value: ctx.env[expr.name] };
-    case "array": {
-      if (expr.elements.length > ctx.maxArrayElements) {
-        return evalError("array literal too large", expr.span, ctx.steps);
-      }
-      const out: RuntimeValue[] = [];
-      ctx.depth++;
-      try {
+  if (ctx.depth > ctx.maxDepth) {
+    return evalError(
+      "evaluation recursion limit exceeded",
+      expr.span,
+      ctx.steps,
+    );
+  }
+
+  ctx.depth++;
+  try {
+    switch (expr.kind) {
+      case "number":
+      case "string":
+      case "boolean":
+        return { success: true, value: expr.value };
+      case "null":
+        return { success: true, value: null };
+      case "identifier":
+        return {
+          success: true,
+          value: Object.hasOwn(ctx.env, expr.name)
+            ? ctx.env[expr.name]
+            : undefined,
+        };
+      case "array": {
+        if (expr.elements.length > ctx.maxArrayElements) {
+          return evalError("array literal too large", expr.span, ctx.steps);
+        }
+        const out: RuntimeValue[] = [];
         for (const el of expr.elements) {
           const r = evalExpr(el, ctx);
           if (!r.success) return r;
           out.push(r.value);
         }
-      } finally {
-        ctx.depth--;
+        return { success: true, value: out };
       }
-      return { success: true, value: out };
-    }
-    case "unary": {
-      const span = expr.span;
-      ctx.depth++;
-      try {
+      case "unary": {
+        const span = expr.span;
         const r = evalExpr(expr.expr, ctx);
         if (!r.success) return r;
         const v = r.value;
@@ -196,31 +265,23 @@ const evalExpr = (expr: Expr, ctx: Ctx): EvalResult => {
         }
 
         return evalError("unknown unary operator", span, ctx.steps);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        return evalError(msg, span, ctx.steps);
-      } finally {
-        ctx.depth--;
       }
-    }
-    case "binary": {
-      const span = expr.span;
-      // Short-circuiting operators must be lazy.
-      if (expr.op === "&&") {
-        const l = evalExpr(expr.left, ctx);
-        if (!l.success) return l;
-        if (!isTruthy(l.value)) return l;
-        return evalExpr(expr.right, ctx);
-      }
-      if (expr.op === "||") {
-        const l = evalExpr(expr.left, ctx);
-        if (!l.success) return l;
-        if (isTruthy(l.value)) return l;
-        return evalExpr(expr.right, ctx);
-      }
+      case "binary": {
+        const span = expr.span;
+        // Short-circuiting operators must be lazy.
+        if (expr.op === "&&") {
+          const l = evalExpr(expr.left, ctx);
+          if (!l.success) return l;
+          if (!isTruthy(l.value)) return l;
+          return evalExpr(expr.right, ctx);
+        }
+        if (expr.op === "||") {
+          const l = evalExpr(expr.left, ctx);
+          if (!l.success) return l;
+          if (isTruthy(l.value)) return l;
+          return evalExpr(expr.right, ctx);
+        }
 
-      ctx.depth++;
-      try {
         const l = evalExpr(expr.left, ctx);
         if (!l.success) return l;
         const r = evalExpr(expr.right, ctx);
@@ -254,36 +315,20 @@ const evalExpr = (expr: Expr, ctx: Ctx): EvalResult => {
           case ">=":
             return { success: true, value: toNumber(a) >= toNumber(b) };
           case "==":
-            return { success: true, value: a == b };
+            return { success: true, value: looseEqualSafe(a, b) };
           case "!=":
-            return { success: true, value: a != b };
+            return { success: true, value: !looseEqualSafe(a, b) };
         }
 
         return evalError("unknown binary operator", span, ctx.steps);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        return evalError(msg, span, ctx.steps);
-      } finally {
-        ctx.depth--;
       }
-    }
-    case "member": {
-      ctx.depth++;
-      try {
+      case "member": {
         const obj = evalExpr(expr.object, ctx);
         if (!obj.success) return obj;
         const value = getMember(obj.value, expr.property);
         return { success: true, value };
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        return evalError(msg, expr.span, ctx.steps);
-      } finally {
-        ctx.depth--;
       }
-    }
-    case "call": {
-      ctx.depth++;
-      try {
+      case "call": {
         let fn: RuntimeValue;
         let receiver: RuntimeValue | undefined;
 
@@ -324,27 +369,34 @@ const evalExpr = (expr: Expr, ctx: Ctx): EvalResult => {
           );
         }
         return { success: true, value: out };
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        return evalError(msg, expr.span, ctx.steps);
-      } finally {
-        ctx.depth--;
+      }
+      case "conditional": {
+        const test = evalExpr(expr.test, ctx);
+        if (!test.success) return test;
+        return isTruthy(test.value)
+          ? evalExpr(expr.consequent, ctx)
+          : evalExpr(expr.alternate, ctx);
       }
     }
-    case "conditional": {
-      const test = evalExpr(expr.test, ctx);
-      if (!test.success) return test;
-      return isTruthy(test.value)
-        ? evalExpr(expr.consequent, ctx)
-        : evalExpr(expr.alternate, ctx);
-    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return evalError(msg, expr.span, ctx.steps);
+  } finally {
+    ctx.depth--;
   }
 };
 
 export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
   const throwOnError = opts.throwOnError ?? true;
+
+  const envRes = normalizeEnv(opts.env as unknown);
+  if (!envRes.ok) {
+    if (throwOnError) throw new Error(envRes.message);
+    return evalError(envRes.message, undefined, 0);
+  }
+
   const ctx: Ctx = {
-    env: opts.env ?? {},
+    env: envRes.env,
     steps: 0,
     maxSteps: opts.maxSteps ?? 10_000,
     depth: 0,
