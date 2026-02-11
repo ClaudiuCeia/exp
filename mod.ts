@@ -1,5 +1,12 @@
 export type { Expr, NodeBase, Span } from "./src/ast/mod.ts";
 export {
+  type FormatCaretOptions,
+  type FormatDiagnosticCaretSource,
+  formatCaret,
+  formatDiagnosticCaret,
+  formatSpanCaret,
+} from "./src/diagnostics.ts";
+export {
   ExpParseError,
   type ParseError,
   parseExpression,

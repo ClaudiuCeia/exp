@@ -1,6 +1,7 @@
 import { buildCommand } from "@stricli/core";
 import { evaluateExpression } from "../src/eval.ts";
 import type { RuntimeValue } from "../src/eval.ts";
+import { formatDiagnosticCaret } from "../src/diagnostics.ts";
 
 export type Format = "json" | "inspect";
 
@@ -162,7 +163,7 @@ export const runCommand = buildCommand({
     });
 
     if (!res.success) {
-      throw new Error(res.error.message);
+      throw new Error(`${res.error.message}\n${formatDiagnosticCaret(expr, res.error)}`);
     }
 
     this.process.stdout.write(formatValue(res.value, format));
@@ -265,7 +266,9 @@ export const replCommand = buildCommand({
       });
 
       if (!res.success) {
-        this.process.stdout.write(`${res.error.message}\n`);
+        this.process.stdout.write(
+          `${res.error.message}\n${formatDiagnosticCaret(line, res.error)}\n`,
+        );
       } else {
         this.process.stdout.write(formatValue(res.value, format));
       }

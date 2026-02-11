@@ -386,13 +386,9 @@ AST `span`.
 Example caret formatter:
 
 ```ts
-function formatCaret(input: string, index: number): string {
-  const start = Math.max(0, index - 40);
-  const end = Math.min(input.length, index + 40);
-  const snippet = input.slice(start, end);
-  const caretPos = index - start;
-  return `${snippet}\n${" ".repeat(caretPos)}^`;
-}
+import { formatCaret } from "jsr:@claudiu-ceia/exp";
+
+console.log(formatCaret("1 + ", 4));
 ```
 
 - `ExpParseError`: includes `index` (byte index into the input string)
