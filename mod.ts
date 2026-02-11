@@ -1,4 +1,4 @@
-export type { Expr, NodeBase, Span } from "./src/ast/mod.ts";
+export type { BinaryOp, Expr, NodeBase, Span, UnaryOp } from "./src/ast/mod.ts";
 export {
   formatCaret,
   type FormatCaretOptions,
@@ -24,5 +24,9 @@ export {
   evaluateExpression,
   type EvaluateExpressionOptions,
   ExpEvalError,
+  type RuntimeArray,
+  type RuntimeFunction,
+  type RuntimeObject,
+  type RuntimePrimitive,
   type RuntimeValue,
 } from "./src/eval.ts";

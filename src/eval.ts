@@ -1,22 +1,34 @@
 import type { Expr, Span } from "./ast/mod.ts";
 import { parseExpression } from "./parse.ts";
 
+/** Primitive runtime values supported by the evaluator. */
 export type RuntimePrimitive = undefined | null | boolean | number | string;
 
+/** A function callable from expressions (must accept/return `RuntimeValue`). */
 export type RuntimeFunction = (...args: RuntimeValue[]) => RuntimeValue;
 
+/** A `RuntimeValue` array. */
 export interface RuntimeArray extends Array<RuntimeValue> {}
 
+/** A plain object mapping string keys to `RuntimeValue`. */
 export interface RuntimeObject {
+  /** Own enumerable properties (prototype is ignored by the evaluator). */
   [key: string]: RuntimeValue;
 }
 
+/**
+ * Allowed runtime data model for evaluation.
+ *
+ * Values are validated at runtime when present in `env`, and function return
+ * values are also validated.
+ */
 export type RuntimeValue =
   | RuntimePrimitive
   | RuntimeArray
   | RuntimeObject
   | RuntimeFunction;
 
+/** Options for `evaluateAst` and `evaluateExpression`. */
 export type EvalOptions = Readonly<{
   /**
    * Identifier bindings available to the expression.
@@ -50,6 +62,12 @@ export type EvalOptions = Readonly<{
   throwOnError?: boolean;
 }>;
 
+/**
+ * An evaluation failure.
+ *
+ * - `span` is present for errors tied to a specific AST node.
+ * - `index` is present when evaluation failed because parsing failed.
+ */
 export type EvalError = Readonly<{
   message: string;
   span?: Span;
@@ -58,11 +76,20 @@ export type EvalError = Readonly<{
   index?: number;
 }>;
 
+/**
+ * Thrown evaluation error (default mode).
+ *
+ * Carries either `span` (eval failures) and/or `index` (parse failures).
+ */
 export class ExpEvalError extends Error {
+  /** AST span for eval errors tied to a node. */
   readonly span?: Span;
+  /** Step counter at the time of failure (useful with budgets). */
   readonly steps?: number;
+  /** Byte index into input when the failure originated from parsing. */
   readonly index?: number;
 
+  /** Create an `ExpEvalError` from an `EvalError` payload. */
   constructor(error: EvalError) {
     super(error.message);
     this.name = "ExpEvalError";
@@ -72,6 +99,7 @@ export class ExpEvalError extends Error {
   }
 }
 
+/** Result returned by `evaluateAst` / `evaluateExpression` in non-throwing mode. */
 export type EvalResult =
   | Readonly<{ success: true; value: RuntimeValue }>
   | Readonly<{ success: false; error: EvalError }>;
@@ -416,6 +444,7 @@ const evalExpr = (expr: Expr, ctx: Ctx): EvalResult => {
   }
 };
 
+/** Evaluate a pre-parsed AST. */
 export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
   const throwOnError = opts.throwOnError ?? true;
 
@@ -442,6 +471,7 @@ export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
   return res;
 }
 
+/** Options for `evaluateExpression` (includes all `EvalOptions`). */
 export type EvaluateExpressionOptions =
   & EvalOptions
   & Readonly<{
@@ -449,7 +479,12 @@ export type EvaluateExpressionOptions =
     throwOnParseError?: boolean;
   }>;
 
-/** Parse + evaluate a single expression. */
+/**
+ * Parse + evaluate a single expression.
+ *
+ * If `throwOnParseError: false`, parse failures return an `EvalError` that
+ * includes `index` so callers can render diagnostics.
+ */
 export function evaluateExpression(
   input: string,
   opts: EvaluateExpressionOptions = {},

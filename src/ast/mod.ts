@@ -1,14 +1,23 @@
+/**
+ * Byte span (half-open) into the original input.
+ *
+ * - `start` is inclusive
+ * - `end` is exclusive
+ */
 export type Span = Readonly<{
   start: number;
   end: number;
 }>;
 
+/** Base fields common to all AST nodes. */
 export type NodeBase = Readonly<{
   span: Span;
 }>;
 
+/** Unary operator tokens supported by the expression language. */
 export type UnaryOp = "!" | "-" | "+";
 
+/** Binary operator tokens supported by the expression language. */
 export type BinaryOp =
   | "+"
   | "-"
@@ -24,6 +33,11 @@ export type BinaryOp =
   | "&&"
   | "||";
 
+/**
+ * Expression AST node.
+ *
+ * Every node includes a `span` into the original input for diagnostics.
+ */
 export type Expr =
   | (NodeBase & { kind: "number"; value: number })
   | (NodeBase & { kind: "string"; value: string })
@@ -42,6 +56,7 @@ export type Expr =
     alternate: Expr;
   });
 
+/** Create a unary expression node. */
 export const mkUnary = (op: UnaryOp, start: number, expr: Expr): Expr => {
   return {
     kind: "unary",
@@ -51,6 +66,7 @@ export const mkUnary = (op: UnaryOp, start: number, expr: Expr): Expr => {
   };
 };
 
+/** Create a binary expression node. */
 export const mkBinary = (left: Expr, op: BinaryOp, right: Expr): Expr => {
   return {
     kind: "binary",
@@ -61,6 +77,7 @@ export const mkBinary = (left: Expr, op: BinaryOp, right: Expr): Expr => {
   };
 };
 
+/** Create a member access node (`object.property`). */
 export const mkMember = (
   object: Expr,
   property: { value: string; end: number },
@@ -73,6 +90,7 @@ export const mkMember = (
   };
 };
 
+/** Create a call node (`callee(args...)`). */
 export const mkCall = (callee: Expr, args: Expr[], end: number): Expr => {
   return {
     kind: "call",

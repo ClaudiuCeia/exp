@@ -30,23 +30,37 @@ import {
 } from "./ast/mod.ts";
 import { createStringSpan } from "./string_literal.ts";
 
+/** Options for `parseExpression`. */
 export type ParseOptions = Readonly<{
   /** When true, throw on parse failure. Default: true */
   throwOnError?: boolean;
 }>;
 
+/**
+ * A parse failure.
+ *
+ * `index` is a byte index into the input string.
+ */
 export type ParseError = Readonly<{
   message: string;
   index: number;
 }>;
 
+/** Result of `parseExpression`. */
 export type ParseResult =
   | Readonly<{ success: true; value: Expr }>
   | Readonly<{ success: false; error: ParseError }>;
 
+/**
+ * Thrown parse error (default mode).
+ *
+ * Carries the byte `index` into the original input.
+ */
 export class ExpParseError extends Error {
+  /** Byte index into the input string where parsing failed. */
   readonly index: number;
 
+  /** Create an `ExpParseError` from a `ParseError` payload. */
   constructor(error: ParseError) {
     super(error.message);
     this.name = "ExpParseError";
@@ -370,7 +384,13 @@ const ExpressionLang: ExprLang = createLanguage<ExprLang>({
   File: (s) => map(seq(lx.trivia, s.Expression, eof()), ([, e]) => e),
 });
 
-/** Parse a single expression. */
+/**
+ * Parse a single expression into an AST.
+ *
+ * - On success: returns `{ success: true, value }`.
+ * - On failure: throws `ExpParseError` by default.
+ *   Set `throwOnError: false` to get `{ success: false, error }`.
+ */
 export function parseExpression(
   input: string,
   opts: ParseOptions = {},

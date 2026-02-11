@@ -1,5 +1,6 @@
 import type { Span } from "./ast/mod.ts";
 
+/** Options for `formatCaret` / `formatSpanCaret`. */
 export type FormatCaretOptions = Readonly<{
   /** Max characters to include before the index. Default: 40 */
   before?: number;
@@ -7,6 +8,7 @@ export type FormatCaretOptions = Readonly<{
   after?: number;
 }>;
 
+/** Options for `formatDiagnosticReport`. */
 export type FormatReportOptions = Readonly<{
   /** Include N lines before/after the error line. Default: 0 */
   contextLines?: number;
@@ -74,6 +76,7 @@ export const formatCaret = (
   return `${snippet}\n${" ".repeat(caretPos)}^`;
 };
 
+/** Format a caret snippet from an AST `span` (uses `span.start`). */
 export const formatSpanCaret = (
   input: string,
   span: Span,
@@ -82,6 +85,7 @@ export const formatSpanCaret = (
   return formatCaret(input, span.start, opts);
 };
 
+/** Input for `formatDiagnosticCaret`. */
 export type FormatDiagnosticCaretSource = Readonly<{
   index?: number;
   span?: Span;
@@ -103,6 +107,7 @@ export const formatDiagnosticCaret = (
   return formatCaret(input, 0, opts);
 };
 
+/** Input for `formatDiagnosticReport`. */
 export type FormatDiagnosticReportSource = Readonly<{
   index?: number;
   span?: Span;
