@@ -44,7 +44,15 @@ Design goals:
   - [Member access restrictions](#member-access-restrictions)
   - [Resource budgets](#resource-budgets)
 - [API reference](#api-reference)
+  - [`parseExpression(input, opts?)`](#parseexpressioninput-opts)
+  - [`evaluateExpression(input, opts?)`](#evaluateexpressioninput-opts)
+  - [`evaluateAst(expr, opts?)`](#evaluateastexpr-opts)
+  - [Options and result types](#options-and-result-types)
+  - [AST types](#ast-types)
+  - [Runtime values](#runtime-values)
 - [Errors and diagnostics](#errors-and-diagnostics)
+  - [`ExpParseError`](#expparseerror)
+  - [`ExpEvalError`](#expevalerror)
 - [CLI](#cli)
 - [Development](#development)
 - [License](#license)
@@ -107,8 +115,6 @@ Chaining:
 
 - `user.profile.name`
 - `fn(1, 2).next(3).done`
-
-## Safe evaluation
 
 ## Safe evaluation model
 
@@ -251,31 +257,143 @@ const out = evaluateAst(ast, { env: { x: 41 }, throwOnError: false });
 
 ### `parseExpression(input, opts?)`
 
-- Returns `{ success: true, value: Expr }` or `{ success: false, error }`.
-- With `opts.throwOnError !== false`, throws `ExpParseError`.
+Parse a single expression into a typed AST.
+
+- Import: `import { parseExpression } from "jsr:@claudiu-ceia/exp"`
+- Returns: `ParseResult`
+- Throws: `ExpParseError` (default behavior)
+
+#### `ParseOptions`
+
+- `throwOnError?: boolean` — default `true`
+
+#### `ParseResult`
+
+- Success: `{ success: true, value: Expr }`
+- Failure: `{ success: false, error: ParseError }`
+
+#### `ParseError`
+
+- `message: string` — compact parser error message
+- `index: number` — byte index into the input string
 
 ### `evaluateExpression(input, opts?)`
 
-- Parses + evaluates.
-- With `opts.throwOnParseError === false`, returns a failure result on parse
-  error.
-- With `opts.throwOnError !== false`, throws `ExpEvalError` on evaluation
-  errors.
+Parse + evaluate in one step.
+
+- Import: `import { evaluateExpression } from "jsr:@claudiu-ceia/exp"`
+- Returns: `EvalResult`
+- Throws: `ExpEvalError` (default behavior)
+
+#### `EvaluateExpressionOptions`
+
+Includes all `EvalOptions` plus:
+
+- `throwOnParseError?: boolean` — default `true`
+
+Parse errors:
+
+- If `throwOnParseError` is `true` (default), parse errors throw
+  `ExpParseError`.
+- If `throwOnParseError` is `false`, parse errors return
+  `{ success: false, error: { message, index, steps: 0 } }`.
 
 ### `evaluateAst(expr, opts?)`
 
-- Evaluates an existing AST.
-- Enforces runtime validation of `opts.env`.
+Evaluate a pre-parsed AST.
 
-### Types
+- Import: `import { evaluateAst } from "jsr:@claudiu-ceia/exp"`
+- Returns: `EvalResult`
+- Throws: `ExpEvalError` (default behavior)
 
-- `Expr`, `Span`, `NodeBase` (AST)
-- `RuntimeValue` (allowed runtime values)
-- `EvalOptions`, `EvalResult`, `EvalError`
+`env` is validated at runtime before evaluation begins.
+
+### Options and result types
+
+#### `EvalOptions`
+
+- `env?: Record<string, RuntimeValue>` — default `{}`
+- `maxSteps?: number` — default `10_000`
+- `maxDepth?: number` — default `256`
+- `maxArrayElements?: number` — default `1_000`
+- `throwOnError?: boolean` — default `true`
+
+#### `EvalResult`
+
+- Success: `{ success: true, value: RuntimeValue }`
+- Failure: `{ success: false, error: EvalError }`
+
+#### `EvalError`
+
+- `message: string` — user-facing error message
+- `span?: Span` — present for evaluation errors tied to an AST node
+- `steps?: number` — step counter at time of failure
+- `index?: number` — present when failure is due to parse error (only returned
+  when `throwOnParseError: false`)
+
+### AST types
+
+All AST nodes include `span: { start: number; end: number }`.
+
+`Expr` is a tagged union with these `kind`s:
+
+- `number`, `string`, `boolean`, `null`
+- `identifier`
+- `array`
+- `unary`
+- `binary`
+- `member`
+- `call`
+- `conditional`
+
+### Runtime values
+
+`RuntimeValue` is the allowed runtime data model:
+
+- primitives: `undefined | null | boolean | number | string`
+- arrays of `RuntimeValue`
+- plain objects (`{...}` or `Object.create(null)`) with `RuntimeValue` values
+- functions: `(...args: RuntimeValue[]) => RuntimeValue`
+
+Notes:
+
+- `env` must be a plain/proto-null object at runtime; class instances (e.g.
+  `Date`) are rejected.
+- Function return values are validated; returning an unsupported value fails
+  evaluation.
 
 ## Errors and diagnostics
 
-When you enable throwing (the default), you’ll get typed errors:
+When you enable throwing (the default), you’ll get typed errors.
+
+### `ExpParseError`
+
+- Extends `Error`
+- Fields:
+  - `index: number`
+
+### `ExpEvalError`
+
+- Extends `Error`
+- Fields:
+  - `span?: Span`
+  - `steps?: number`
+  - `index?: number`
+
+This makes it easy to render caret diagnostics from either a byte `index` or an
+AST `span`.
+
+Example caret formatter:
+
+```ts
+function formatCaret(input: string, index: number): string {
+  const start = Math.max(0, index - 40);
+  const end = Math.min(input.length, index + 40);
+  const snippet = input.slice(start, end);
+  const caretPos = index - start;
+  return `${snippet}\n${" ".repeat(caretPos)}^`;
+}
+```
 
 - `ExpParseError`: includes `index` (byte index into the input string)
 - `ExpEvalError`: includes `span` (AST span) and `steps` (budget counter)
