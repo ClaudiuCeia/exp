@@ -144,6 +144,27 @@ Deno.test("evaluateExpression can call allow-listed functions", () => {
   assertEquals(res.value, 42);
 });
 
+Deno.test("evaluateExpression binds receiver for member calls", () => {
+  const user = {
+    name: "Ada",
+    getName: function (this: unknown) {
+      if (typeof this === "object" && this !== null && "name" in this) {
+        // deno-lint-ignore no-explicit-any
+        return (this as any).name;
+      }
+      return "bad";
+    },
+  };
+
+  const res = evaluateExpression("user.getName()", {
+    throwOnError: false,
+    env: { user },
+  });
+  assertEquals(res.success, true);
+  if (!res.success) return;
+  assertEquals(res.value, "Ada");
+});
+
 Deno.test("evaluateExpression errors when calling non-functions", () => {
   const res = evaluateExpression("1(2)", { throwOnError: false });
   assertEquals(res.success, false);

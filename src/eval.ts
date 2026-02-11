@@ -284,10 +284,20 @@ const evalExpr = (expr: Expr, ctx: Ctx): EvalResult => {
     case "call": {
       ctx.depth++;
       try {
-        const callee = evalExpr(expr.callee, ctx);
-        if (!callee.success) return callee;
+        let fn: RuntimeValue;
+        let receiver: RuntimeValue | undefined;
 
-        const fn = callee.value;
+        if (expr.callee.kind === "member") {
+          const obj = evalExpr(expr.callee.object, ctx);
+          if (!obj.success) return obj;
+          receiver = obj.value;
+          fn = getMember(obj.value, expr.callee.property);
+        } else {
+          const callee = evalExpr(expr.callee, ctx);
+          if (!callee.success) return callee;
+          fn = callee.value;
+        }
+
         if (typeof fn !== "function") {
           return evalError(
             "attempted to call a non-function",
@@ -303,7 +313,9 @@ const evalExpr = (expr: Expr, ctx: Ctx): EvalResult => {
           args.push(ar.value);
         }
 
-        const out = fn(...args);
+        const out = receiver === undefined
+          ? fn(...args)
+          : fn.apply(receiver, args);
         if (!isRuntimeValue(out)) {
           return evalError(
             "function returned an unsupported value",
