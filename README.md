@@ -3,13 +3,56 @@
 A small expression language toolkit: parse expressions, get a typed AST with
 spans, and evaluate safely.
 
-## Why
+```ts
+import { evaluateExpression } from "jsr:@claudiu-ceia/exp";
 
-This is aimed at real "mini-language" use cases:
+const res = evaluateExpression('status == "open" && priority >= 3', {
+  env: { status: "open", priority: 4 },
+  throwOnError: false,
+});
+
+if (res.success) {
+  console.log(res.value); // true
+}
+```
+
+## Overview
+
+**exp** is a tiny, deterministic expression parser + evaluator intended for
+"mini-language" use cases:
 
 - API-rich filters (`status == "open" && priority >= 3`)
-- small data-wrangling pipelines (`input |> map(...) |> filter(...)`)
+- data-wrangling pipelines (`input |> map(...) |> filter(...)`)
 - backtesting strategies (signals, conditions, thresholds) in a constrained DSL
+
+Design goals:
+
+- **No `eval` / `new Function`** — all evaluation is interpreter-based.
+- **Typed AST + spans** — nodes carry `{ start, end }` indices for diagnostics.
+- **Safe-by-default access** — expressions only touch data/functions you place
+  in `env`.
+- **Budgeted evaluation** — max steps, recursion depth, and array literal size.
+
+## Documentation
+
+- [Installation](#installation)
+- [Getting started](#getting-started)
+- [Supported syntax](#supported-syntax-today)
+  - [Equality semantics (`==` / `!=`)](#equality-semantics--)
+- [Safe evaluation model](#safe-evaluation-model)
+  - [`env` and runtime values](#env-and-runtime-values)
+  - [Member access restrictions](#member-access-restrictions)
+  - [Resource budgets](#resource-budgets)
+- [API reference](#api-reference)
+- [Errors and diagnostics](#errors-and-diagnostics)
+- [CLI](#cli)
+- [Development](#development)
+- [License](#license)
+
+## Why
+
+The expression language is intentionally small, but ergonomic enough for real
+application DSLs.
 
 ## Non-goals
 
@@ -67,12 +110,19 @@ Chaining:
 
 ## Safe evaluation
 
+## Safe evaluation model
+
 Use `evaluateExpression` to parse + evaluate in one step, with an explicit
 environment and resource budgets.
 
-- `evaluateExpression("status == \"open\" && priority >= 3", { env })`
+At a high level:
 
-### `env`
+- Identifiers read from `env` only.
+- Member access is restricted.
+- Calls are only possible through functions present in `env`.
+- Evaluation has configurable budgets.
+
+### `env` and runtime values
 
 `env` is the _only_ way expressions can access data and functions. Identifiers
 resolve to properties on `env`.
@@ -89,10 +139,30 @@ Member access (`obj.prop`) is intentionally conservative:
 - Works on plain objects (and arrays only expose `.length`).
 - Blocks `__proto__`, `prototype`, and `constructor`.
 
+`env` is validated at runtime: it must be a plain object (or proto-null object),
+and all nested values must be supported runtime values.
+
+### Member access restrictions
+
+- Only plain objects expose own-properties.
+- Arrays expose `.length` only.
+- Everything else returns `undefined`.
+
+This is designed to avoid prototype leakage and surprise access to inherited
+properties.
+
+### Resource budgets
+
+Evaluation supports a few defensive limits (all optional):
+
+- `maxSteps` (default `10_000`): max AST nodes visited
+- `maxDepth` (default `256`): max recursion depth while evaluating
+- `maxArrayElements` (default `1_000`): max elements in an array literal
+
 #### Example: filter over an input object
 
 ```ts
-import { evaluateExpression } from "exp";
+import { evaluateExpression } from "jsr:@claudiu-ceia/exp";
 
 const env = {
   status: "open",
@@ -108,7 +178,7 @@ const res = evaluateExpression('status == "open" && priority >= 3', {
 #### Example: allow-listed helper functions
 
 ```ts
-import { evaluateExpression } from "exp";
+import { evaluateExpression } from "jsr:@claudiu-ceia/exp";
 
 const env = {
   lower: (s: unknown) => (typeof s === "string" ? s.toLowerCase() : ""),
@@ -126,6 +196,92 @@ const res = evaluateExpression('contains(lower(user.plan), "free")', {
   throwOnError: false,
 });
 ```
+
+## Installation
+
+### Deno / JSR
+
+```ts
+import { evaluateExpression } from "jsr:@claudiu-ceia/exp";
+```
+
+Or add it to your project:
+
+```sh
+deno add jsr:@claudiu-ceia/exp
+```
+
+### npm
+
+This package is published for npm via a generated build.
+
+```sh
+npx jsr add @claudiu-ceia/exp
+```
+
+Then:
+
+```ts
+import { evaluateExpression } from "@claudiu-ceia/exp";
+```
+
+## Getting started
+
+### Parse only
+
+```ts
+import { parseExpression } from "jsr:@claudiu-ceia/exp";
+
+const parsed = parseExpression("1 + 2 * 3", { throwOnError: false });
+if (parsed.success) {
+  console.log(parsed.value.kind); // "binary"
+}
+```
+
+### Evaluate a pre-parsed AST
+
+```ts
+import { evaluateAst, parseExpression } from "jsr:@claudiu-ceia/exp";
+
+const ast = parseExpression("x + 1").value;
+const out = evaluateAst(ast, { env: { x: 41 }, throwOnError: false });
+```
+
+## API reference
+
+### `parseExpression(input, opts?)`
+
+- Returns `{ success: true, value: Expr }` or `{ success: false, error }`.
+- With `opts.throwOnError !== false`, throws `ExpParseError`.
+
+### `evaluateExpression(input, opts?)`
+
+- Parses + evaluates.
+- With `opts.throwOnParseError === false`, returns a failure result on parse
+  error.
+- With `opts.throwOnError !== false`, throws `ExpEvalError` on evaluation
+  errors.
+
+### `evaluateAst(expr, opts?)`
+
+- Evaluates an existing AST.
+- Enforces runtime validation of `opts.env`.
+
+### Types
+
+- `Expr`, `Span`, `NodeBase` (AST)
+- `RuntimeValue` (allowed runtime values)
+- `EvalOptions`, `EvalResult`, `EvalError`
+
+## Errors and diagnostics
+
+When you enable throwing (the default), you’ll get typed errors:
+
+- `ExpParseError`: includes `index` (byte index into the input string)
+- `ExpEvalError`: includes `span` (AST span) and `steps` (budget counter)
+
+If you prefer non-throwing control flow, use `throwOnError: false` and inspect
+the returned `{ success: false, error: { message, span?, steps?, index? } }`.
 
 ## Development
 
