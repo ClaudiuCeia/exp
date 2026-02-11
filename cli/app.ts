@@ -3,6 +3,8 @@ import { replCommand, runCommand } from "./commands.ts";
 
 function formatCommandException(exc: unknown): string {
   if (exc instanceof Error) {
+    // If the message is multi-line, it already carries its own formatting.
+    if (exc.message.includes("\n")) return exc.message;
     return exc.message.length > 0 ? `Error: ${exc.message}` : "Error";
   }
   return String(exc);
@@ -17,7 +19,7 @@ const text = {
   exceptionWhileLoadingCommandContext: (exc: unknown) =>
     `Unable to load command context, ${formatCommandException(exc)}`,
   exceptionWhileRunningCommand: (exc: unknown) =>
-    `Command failed, ${formatCommandException(exc)}`,
+    `Command failed\n\n${formatCommandException(exc)}`,
 };
 
 const routes = buildRouteMap({

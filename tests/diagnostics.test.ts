@@ -2,6 +2,7 @@ import { assertEquals } from "@std/assert";
 import {
   formatCaret,
   formatDiagnosticCaret,
+  formatDiagnosticReport,
   formatSpanCaret,
 } from "../src/diagnostics.ts";
 
@@ -36,4 +37,14 @@ Deno.test("formatDiagnosticCaret prefers index over span", () => {
     span: { start: 1, end: 2 },
   });
   assertEquals(out.split("\n")[1], "   ^");
+});
+
+Deno.test("formatDiagnosticReport renders unicode arrow with message", () => {
+  const out = formatDiagnosticReport("1 +", {
+    message: "expected expression at 1:4",
+    index: 3,
+  });
+  const lines = out.split("\n");
+  assertEquals(lines[0], "1 | 1 +");
+  assertEquals(lines[1], "  |    ╰─▶ expected expression at 1:4");
 });

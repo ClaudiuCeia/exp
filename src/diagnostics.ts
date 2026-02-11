@@ -7,6 +7,42 @@ export type FormatCaretOptions = Readonly<{
   after?: number;
 }>;
 
+export type FormatReportOptions = Readonly<{
+  /** Include N lines before/after the error line. Default: 0 */
+  contextLines?: number;
+  /** Expand tabs to this many spaces. Default: 2 */
+  tabWidth?: number;
+}>;
+
+const expandTabs = (s: string, tabWidth: number): string => {
+  if (tabWidth <= 0) return s;
+  return s.replaceAll("\t", " ".repeat(tabWidth));
+};
+
+const clampIndex = (input: string, index: number): number => {
+  return Math.max(0, Math.min(input.length, index));
+};
+
+const splitLines = (input: string): string[] => {
+  return input.split("\n").map((l) => (l.endsWith("\r") ? l.slice(0, -1) : l));
+};
+
+const findLineInfo = (
+  input: string,
+  index: number,
+): {
+  line: number; // 1-based
+  column: number; // 1-based
+  lineIndex: number; // 0-based
+  lineStart: number;
+} => {
+  const i = clampIndex(input, index);
+  const lineStart = input.lastIndexOf("\n", i - 1) + 1;
+  const lineIndex = input.slice(0, lineStart).split("\n").length - 1;
+  const column = i - lineStart + 1;
+  return { line: lineIndex + 1, column, lineIndex, lineStart };
+};
+
 /**
  * Format a single-line snippet around `index` with a caret.
  *
@@ -22,7 +58,7 @@ export const formatCaret = (
   const before = opts.before ?? 40;
   const after = opts.after ?? 40;
 
-  const i = Math.max(0, Math.min(input.length, index));
+  const i = clampIndex(input, index);
 
   const lineStart = input.lastIndexOf("\n", i - 1) + 1;
   const lineEnd = (() => {
@@ -63,4 +99,57 @@ export const formatDiagnosticCaret = (
   if (typeof diag.index === "number") return formatCaret(input, diag.index, opts);
   if (diag.span) return formatSpanCaret(input, diag.span, opts);
   return formatCaret(input, 0, opts);
+};
+
+export type FormatDiagnosticReportSource = Readonly<{
+  index?: number;
+  span?: Span;
+  message: string;
+}>;
+
+/**
+ * Format a diagnostic in an Elm/OCaml-inspired style:
+ *
+ * ```
+ *  1 | 1 +
+ *    |   ╰─▶ expected expression at 1:4
+ * ```
+ */
+export const formatDiagnosticReport = (
+  input: string,
+  diag: FormatDiagnosticReportSource,
+  opts: FormatReportOptions = {},
+): string => {
+  const contextLines = opts.contextLines ?? 0;
+  const tabWidth = opts.tabWidth ?? 2;
+
+  const index = typeof diag.index === "number"
+    ? diag.index
+    : (diag.span ? diag.span.start : 0);
+
+  const lines = splitLines(input);
+  const info = findLineInfo(input, index);
+
+  const startLineIdx = Math.max(0, info.lineIndex - contextLines);
+  const endLineIdx = Math.min(lines.length - 1, info.lineIndex + contextLines);
+  const lineNoWidth = String(endLineIdx + 1).length;
+
+  const out: string[] = [];
+  for (let i = startLineIdx; i <= endLineIdx; i++) {
+    const lineNo = String(i + 1).padStart(lineNoWidth, " ");
+    const printed = expandTabs(lines[i] ?? "", tabWidth);
+    out.push(`${lineNo} | ${printed}`);
+
+    if (i === info.lineIndex) {
+      const rawLine = lines[i] ?? "";
+      const rawPrefix = rawLine.slice(0, Math.max(0, info.column - 1));
+      const caretPos = expandTabs(rawPrefix, tabWidth).length;
+
+      const gutter = " ".repeat(lineNoWidth);
+      const arrow = `${gutter} | ${" ".repeat(caretPos)}╰─▶ ${diag.message}`;
+      out.push(arrow);
+    }
+  }
+
+  return out.join("\n");
 };
