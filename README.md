@@ -1,7 +1,15 @@
 # exp
 
-A small expression language toolkit: parse expressions, get a typed AST with
-spans, and evaluate safely.
+[![JSR](https://jsr.io/badges/@claudiu-ceia/exp)](https://jsr.io/@claudiu-ceia/exp)
+[![JSR Score](https://jsr.io/badges/@claudiu-ceia/exp/score)](https://jsr.io/@claudiu-ceia/exp/score)
+[![CI](https://github.com/ClaudiuCeia/exp/actions/workflows/ci.yml/badge.svg)](https://github.com/ClaudiuCeia/exp/actions/workflows/ci.yml)
+
+A small, deterministic expression language: parse into a typed AST with spans,
+then evaluate safely against an explicit environment.
+
+- Docs: https://jsr.io/@claudiu-ceia/exp/doc
+- Package: https://jsr.io/@claudiu-ceia/exp
+- Repo: https://github.com/ClaudiuCeia/exp
 
 ```ts
 import { evaluateExpression } from "jsr:@claudiu-ceia/exp";
@@ -33,7 +41,53 @@ Design goals:
   in `env`.
 - **Budgeted evaluation** — max steps, recursion depth, and array literal size.
 
-## Documentation
+## Quickstart
+
+Install:
+
+```sh
+# Deno
+deno add jsr:@claudiu-ceia/exp
+
+# Node/Bun (via JSR)
+npx jsr add @claudiu-ceia/exp
+```
+
+Evaluate (non-throwing) and render a pretty diagnostic on failure:
+
+```ts
+import {
+  evaluateExpression,
+  ExpEvalError,
+  formatDiagnosticReport,
+} from "jsr:@claudiu-ceia/exp";
+
+const input = "missing + 1";
+
+try {
+  const res = evaluateExpression(input); // throws by default
+  console.log(res.value);
+} catch (e) {
+  if (e instanceof ExpEvalError) {
+    console.error(
+      formatDiagnosticReport(input, {
+        message: e.message,
+        span: e.span,
+        index: e.index,
+      }),
+    );
+  } else {
+    throw e;
+  }
+}
+```
+
+Notes:
+
+- Missing identifiers throw by default (`unknownIdentifier: "error"`).
+- Opt into legacy behavior with `unknownIdentifier: "undefined"`.
+
+## Table of contents
 
 - [Installation](#installation)
 - [Getting started](#getting-started)
@@ -44,15 +98,7 @@ Design goals:
   - [Member access restrictions](#member-access-restrictions)
   - [Resource budgets](#resource-budgets)
 - [API reference](#api-reference)
-  - [`parseExpression(input, opts?)`](#parseexpressioninput-opts)
-  - [`evaluateExpression(input, opts?)`](#evaluateexpressioninput-opts)
-  - [`evaluateAst(expr, opts?)`](#evaluateastexpr-opts)
-  - [Options and result types](#options-and-result-types)
-  - [AST types](#ast-types)
-  - [Runtime values](#runtime-values)
 - [Errors and diagnostics](#errors-and-diagnostics)
-  - [`ExpParseError`](#expparseerror)
-  - [`ExpEvalError`](#expevalerror)
 - [CLI](#cli)
 - [Development](#development)
 - [License](#license)
@@ -181,6 +227,10 @@ const res = evaluateExpression('status == "open" && priority >= 3', {
   env,
   throwOnError: false,
 });
+
+if (res.success) {
+  console.log(res.value);
+}
 ```
 
 #### Example: allow-listed helper functions
