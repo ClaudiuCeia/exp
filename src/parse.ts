@@ -43,6 +43,16 @@ export type ParseResult =
   | Readonly<{ success: true; value: Expr }>
   | Readonly<{ success: false; error: ParseError }>;
 
+export class ExpParseError extends Error {
+  readonly index: number;
+
+  constructor(error: ParseError) {
+    super(error.message);
+    this.name = "ExpParseError";
+    this.index = error.index;
+  }
+}
+
 const guard = <T>(
   p: Parser<T>,
   pred: (value: T) => boolean,
@@ -338,7 +348,7 @@ export function parseExpression(
   const message = formatErrorCompact(res);
   const err: ParseError = { message, index: res.ctx.index };
   if (throwOnError) {
-    throw new Error(message);
+    throw new ExpParseError(err);
   }
   return { success: false, error: err };
 }

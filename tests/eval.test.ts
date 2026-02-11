@@ -1,6 +1,6 @@
 import { assertEquals, assertMatch, assertThrows } from "@std/assert";
 import type { Expr } from "../src/ast/mod.ts";
-import { evaluateAst, evaluateExpression } from "../src/eval.ts";
+import { evaluateAst, evaluateExpression, ExpEvalError } from "../src/eval.ts";
 import type { RuntimeValue } from "../src/eval.ts";
 
 Deno.test("evaluateExpression evaluates arithmetic", () => {
@@ -357,12 +357,20 @@ Deno.test("evaluateExpression evaluates conditionals", () => {
 });
 
 Deno.test("evaluateExpression forbids dangerous member access", () => {
-  assertThrows(() => {
+  try {
     evaluateExpression("obj.__proto__", {
       env: { obj: { a: 1 } },
       throwOnError: true,
     });
-  });
+    throw new Error("expected evaluateExpression to throw");
+  } catch (e) {
+    assertEquals(e instanceof ExpEvalError, true);
+    if (e instanceof ExpEvalError) {
+      assertEquals(typeof e.steps, "number");
+      assertEquals(e.steps! >= 1, true);
+      assertEquals(!!e.span, true);
+    }
+  }
 
   const res = evaluateExpression("obj.__proto__", {
     env: { obj: { a: 1 } },
@@ -409,6 +417,9 @@ Deno.test("evaluateExpression reports parse failures when throwOnParseError=fals
     throwOnParseError: false,
   });
   assertEquals(res.success, false);
+  if (res.success) return;
+  assertEquals(typeof res.error.index, "number");
+  assertEquals(res.error.index! >= 0, true);
 });
 
 Deno.test("evaluateAst returns errors for unknown operators (defensive)", () => {

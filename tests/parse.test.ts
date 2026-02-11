@@ -1,5 +1,5 @@
-import { assertEquals, assertThrows } from "@std/assert";
-import { parseExpression } from "../src/parse.ts";
+import { assertEquals } from "@std/assert";
+import { ExpParseError, parseExpression } from "../src/parse.ts";
 
 Deno.test("parseExpression parses numbers", () => {
   const res = parseExpression("  123  ", { throwOnError: false });
@@ -257,5 +257,14 @@ Deno.test("parseExpression fails on empty", () => {
 });
 
 Deno.test("parseExpression throws by default on parse errors", () => {
-  assertThrows(() => parseExpression("   "));
+  try {
+    parseExpression("   ");
+    throw new Error("expected parseExpression to throw");
+  } catch (e) {
+    assertEquals(e instanceof ExpParseError, true);
+    if (e instanceof ExpParseError) {
+      assertEquals(typeof e.index, "number");
+      assertEquals(e.index >= 0, true);
+    }
+  }
 });

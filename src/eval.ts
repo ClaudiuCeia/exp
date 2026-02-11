@@ -46,7 +46,23 @@ export type EvalError = Readonly<{
   message: string;
   span?: Span;
   steps?: number;
+  /** Parse error index when evaluation fails due to parse failure. */
+  index?: number;
 }>;
+
+export class ExpEvalError extends Error {
+  readonly span?: Span;
+  readonly steps?: number;
+  readonly index?: number;
+
+  constructor(error: EvalError) {
+    super(error.message);
+    this.name = "ExpEvalError";
+    this.span = error.span;
+    this.steps = error.steps;
+    this.index = error.index;
+  }
+}
 
 export type EvalResult =
   | Readonly<{ success: true; value: RuntimeValue }>
@@ -391,8 +407,9 @@ export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
 
   const envRes = normalizeEnv(opts.env as unknown);
   if (!envRes.ok) {
-    if (throwOnError) throw new Error(envRes.message);
-    return evalError(envRes.message, undefined, 0);
+    const e: EvalError = { message: envRes.message, steps: 0 };
+    if (throwOnError) throw new ExpEvalError(e);
+    return { success: false, error: e };
   }
 
   const ctx: Ctx = {
@@ -406,7 +423,7 @@ export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
 
   const res = evalExpr(expr, ctx);
   if (res.success) return res;
-  if (throwOnError) throw new Error(res.error.message);
+  if (throwOnError) throw new ExpEvalError(res.error);
   return res;
 }
 
@@ -431,6 +448,7 @@ export function evaluateExpression(
       error: {
         message: parsed.error.message,
         steps: 0,
+        index: parsed.error.index,
       },
     };
   }
