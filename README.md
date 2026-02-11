@@ -394,6 +394,25 @@ import { formatCaret } from "jsr:@claudiu-ceia/exp";
 console.log(formatCaret("1 + ", 4));
 ```
 
+This package also exports a richer report-style formatter (used by the CLI):
+
+```ts
+import { formatDiagnosticReport } from "jsr:@claudiu-ceia/exp";
+
+console.log(
+  formatDiagnosticReport("1 + ", {
+    message: "expected expression at 1:4",
+    index: 4,
+  }),
+);
+```
+
+Diagnostics helpers exported from `mod.ts`:
+
+- `formatCaret` / `formatSpanCaret`
+- `formatDiagnosticCaret` (prefers `index`, falls back to `span.start`)
+- `formatDiagnosticReport` (Elm/OCaml-inspired report output)
+
 - `ExpParseError`: includes `index` (byte index into the input string)
 - `ExpEvalError`: includes `span` (AST span) and `steps` (budget counter)
 
