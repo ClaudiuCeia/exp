@@ -32,6 +32,20 @@ Expressions:
 - pipeline: `lhs |> fn` and `lhs |> fn(arg1, arg2, ...)` (desugars to `fn(lhs)`
   / `fn(lhs, ...)`)
 
+### Equality semantics (`==` / `!=`)
+
+Equality is intentionally **JS-like for primitives**, but **never coerces
+objects/arrays/functions** via implicit `ToPrimitive` (so no surprise
+`toString()` / `valueOf()` calls).
+
+- Primitives: loosely coerced similar to JavaScript
+  - `null == undefined` is `true`
+  - booleans coerce to numbers (`true` → `1`, `false` → `0`)
+  - strings and numbers may coerce via `Number(...)`
+- Non-primitives (plain objects, arrays, functions): **reference equality only**
+  - `user == user` can be `true`
+  - `user == "[object Object]"` is `false` (no coercion)
+
 String literals:
 
 - single or double quotes
