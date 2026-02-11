@@ -3,6 +3,7 @@ import {
   chainl1,
   createLanguage,
   createLexer,
+  cut,
   eof,
   failure,
   formatErrorCompact,
@@ -52,6 +53,20 @@ export class ExpParseError extends Error {
     this.index = error.index;
   }
 }
+
+const expecting = <T>(parser: Parser<T>, expected: string): Parser<T> => {
+  return (ctx) => {
+    const res = parser(ctx);
+    if (res.success) return res;
+
+    // Only override when the parser didn't advance.
+    // This avoids turning useful errors (like missing ')') into generic ones.
+    if (res.ctx.index !== ctx.index) return res;
+    if (res.fatal) return res;
+
+    return { ...res, expected };
+  };
+};
 
 const guard = <T>(
   p: Parser<T>,
@@ -129,7 +144,17 @@ const ExpressionLang: ExprLang = createLanguage<ExprLang>({
     const q = lx.symbol("?");
     const colon = lx.symbol(":");
     return map(
-      seq(s.Pipeline, optional(seq(q, s.Expression, colon, s.Expression))),
+      seq(
+        s.Pipeline,
+        optional(
+          seq(
+            q,
+            cut(s.Expression, "expression after '?'"),
+            cut(colon, "':' in conditional expression"),
+            cut(s.Expression, "expression after ':'"),
+          ),
+        ),
+      ),
       ([test, rest]) => {
         if (!rest) return test;
         const [, consequent, , alternate] = rest;
@@ -165,12 +190,15 @@ const ExpressionLang: ExprLang = createLanguage<ExprLang>({
       };
     };
 
-    return map(seq(s.LogicalOr, many(seq(op, s.Postfix))), ([first, rest]) => {
+    return map(
+      seq(s.LogicalOr, many(seq(op, cut(s.Postfix, "expression after '|>'")))),
+      ([first, rest]) => {
       return rest.reduce(
         (acc, [, rhs]) => mkPipedCall(acc.span.start, rhs, acc),
         first,
       );
-    });
+      },
+    );
   },
 
   LogicalOr: (s) => {
@@ -235,18 +263,24 @@ const ExpressionLang: ExprLang = createLanguage<ExprLang>({
   },
 
   Postfix: (s) => {
-    const memberOp = map(seq(lx.symbol("."), identSpan), ([, prop]) => {
+    const memberOp = map(
+      seq(lx.symbol("."), cut(identSpan, "identifier after '.'")),
+      ([, prop]) => {
       return (obj: Expr): Expr => mkMember(obj, prop);
-    });
+      },
+    );
 
     const args = map(
       sepBy(s.Expression, comma),
       (xs) => xs.filter((x): x is Expr => typeof x !== "string"),
     );
 
-    const callOp = map(seq(lparen, args, rparen), ([, args, end]) => {
+    const callOp = map(
+      seq(lparen, args, cut(rparen, "closing ')'")),
+      ([, args, end]) => {
       return (callee: Expr): Expr => mkCall(callee, args, end);
-    });
+      },
+    );
 
     const op = any(memberOp, callOp);
     return map(seq(s.Primary, many(op)), ([base, ops]) => {
@@ -319,7 +353,8 @@ const ExpressionLang: ExprLang = createLanguage<ExprLang>({
       ([, e]) => e,
     );
 
-    return any(
+    return expecting(
+      any(
       arrayExpr,
       boolExpr,
       nullExpr,
@@ -327,6 +362,8 @@ const ExpressionLang: ExprLang = createLanguage<ExprLang>({
       strExpr,
       parenExpr,
       identExpr,
+      ),
+      "expression",
     );
   },
 

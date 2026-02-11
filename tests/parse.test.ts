@@ -1,4 +1,4 @@
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertStringIncludes } from "@std/assert";
 import { ExpParseError, parseExpression } from "../src/parse.ts";
 
 Deno.test("parseExpression parses numbers", () => {
@@ -267,4 +267,46 @@ Deno.test("parseExpression throws by default on parse errors", () => {
       assertEquals(e.index >= 0, true);
     }
   }
+});
+
+Deno.test("parseExpression reports missing RHS as expected expression", () => {
+  const res = parseExpression("1 +", { throwOnError: false });
+  assertEquals(res.success, false);
+  if (res.success) return;
+
+  assertStringIncludes(res.error.message, "expected expression");
+  assertStringIncludes(res.error.message, "at 1:4");
+  assertEquals(res.error.index, 3);
+});
+
+Deno.test("parseExpression reports pipeline missing RHS with helpful message", () => {
+  const res = parseExpression("1 |>", { throwOnError: false });
+  assertEquals(res.success, false);
+  if (res.success) return;
+
+  assertStringIncludes(res.error.message, "expression after '|>'");
+});
+
+Deno.test("parseExpression reports conditional missing consequent with helpful message", () => {
+  const res = parseExpression("1 ?", { throwOnError: false });
+  assertEquals(res.success, false);
+  if (res.success) return;
+
+  assertStringIncludes(res.error.message, "expression after '?'" );
+});
+
+Deno.test("parseExpression reports member missing property name", () => {
+  const res = parseExpression("foo.", { throwOnError: false });
+  assertEquals(res.success, false);
+  if (res.success) return;
+
+  assertStringIncludes(res.error.message, "identifier after '.'");
+});
+
+Deno.test("parseExpression reports call missing closing paren", () => {
+  const res = parseExpression("f(", { throwOnError: false });
+  assertEquals(res.success, false);
+  if (res.success) return;
+
+  assertStringIncludes(res.error.message, "closing ')'" );
 });
