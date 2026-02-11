@@ -133,7 +133,9 @@ At a high level:
 `env` is the _only_ way expressions can access data and functions. Identifiers
 resolve to properties on `env`.
 
-- Missing identifiers evaluate to `undefined`.
+- Missing identifiers throw by default (`unknownIdentifier: "error"`).
+- Set `unknownIdentifier: "undefined"` to treat missing identifiers as
+  `undefined`.
 - Values must be made of supported runtime values:
   - primitives: `undefined | null | boolean | number | string`
   - arrays of supported values
@@ -313,6 +315,7 @@ Evaluate a pre-parsed AST.
 #### `EvalOptions`
 
 - `env?: Record<string, RuntimeValue>` — default `{}`
+- `unknownIdentifier?: "error" | "undefined"` — default `"error"`
 - `maxSteps?: number` — default `10_000`
 - `maxDepth?: number` — default `256`
 - `maxArrayElements?: number` — default `1_000`

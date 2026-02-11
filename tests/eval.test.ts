@@ -20,6 +20,7 @@ Deno.test("evaluateExpression handles unary ops", () => {
 Deno.test("evaluateExpression supports string concatenation", () => {
   const res = evaluateExpression("'a' + 1 + true + null + undefined", {
     throwOnError: false,
+    env: { undefined: undefined },
   });
   assertEquals(res.success, true);
   if (!res.success) return;
@@ -72,12 +73,20 @@ Deno.test("evaluateExpression supports toNumber conversions", () => {
   if (!res1.success) return;
   assertEquals(res1.value, 1);
 
+  // By default, missing identifiers are errors.
   const res2 = evaluateExpression("+missing", { throwOnError: false });
-  assertEquals(res2.success, true);
-  if (!res2.success) return;
-  assertEquals(typeof res2.value, "number");
-  if (typeof res2.value !== "number") return;
-  assertEquals(Number.isNaN(res2.value), true);
+  assertEquals(res2.success, false);
+
+  // Legacy JS-ish behavior is still available behind an option.
+  const res2b = evaluateExpression("+missing", {
+    throwOnError: false,
+    unknownIdentifier: "undefined",
+  });
+  assertEquals(res2b.success, true);
+  if (!res2b.success) return;
+  assertEquals(typeof res2b.value, "number");
+  if (typeof res2b.value !== "number") return;
+  assertEquals(Number.isNaN(res2b.value), true);
 
   const res3 = evaluateExpression("+s", {
     throwOnError: false,
@@ -147,6 +156,7 @@ Deno.test("evaluateExpression does not expose inherited env properties", () => {
   const res = evaluateExpression("toString", {
     throwOnError: false,
     env: {},
+    unknownIdentifier: "undefined",
   });
   assertEquals(res.success, true);
   if (!res.success) return;
@@ -163,8 +173,16 @@ Deno.test("evaluateExpression does not expose inherited member properties", () =
   assertEquals(res.value, undefined);
 });
 
-Deno.test("evaluateExpression returns undefined for missing identifiers", () => {
+Deno.test("evaluateExpression errors by default on missing identifiers", () => {
   const res = evaluateExpression("missing", { throwOnError: false });
+  assertEquals(res.success, false);
+});
+
+Deno.test("evaluateExpression can treat missing identifiers as undefined", () => {
+  const res = evaluateExpression("missing", {
+    throwOnError: false,
+    unknownIdentifier: "undefined",
+  });
   assertEquals(res.success, true);
   if (!res.success) return;
   assertEquals(res.value, undefined);

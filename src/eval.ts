@@ -38,6 +38,14 @@ export type EvalOptions = Readonly<{
   /** Max elements allowed in an array literal. Default: 1_000 */
   maxArrayElements?: number;
 
+  /**
+   * Behavior when an identifier is not present on `env`.
+   *
+   * - `"error"`: fail evaluation with a typed error (default)
+   * - `"undefined"`: treat missing identifiers as `undefined` (legacy JS-ish)
+   */
+  unknownIdentifier?: "error" | "undefined";
+
   /** When true, throw on evaluation failure. Default: true */
   throwOnError?: boolean;
 }>;
@@ -75,6 +83,7 @@ type Ctx = {
   depth: number;
   maxDepth: number;
   maxArrayElements: number;
+  unknownIdentifier: "error" | "undefined";
 };
 
 const FORBIDDEN_MEMBERS = new Set([
@@ -248,12 +257,13 @@ const evalExpr = (expr: Expr, ctx: Ctx): EvalResult => {
       case "null":
         return { success: true, value: null };
       case "identifier":
-        return {
-          success: true,
-          value: Object.hasOwn(ctx.env, expr.name)
-            ? ctx.env[expr.name]
-            : undefined,
-        };
+        if (Object.hasOwn(ctx.env, expr.name)) {
+          return { success: true, value: ctx.env[expr.name] };
+        }
+        if (ctx.unknownIdentifier === "undefined") {
+          return { success: true, value: undefined };
+        }
+        return evalError(`unknown identifier '${expr.name}'`, expr.span, ctx.steps);
       case "array": {
         if (expr.elements.length > ctx.maxArrayElements) {
           return evalError("array literal too large", expr.span, ctx.steps);
@@ -419,6 +429,7 @@ export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
     depth: 0,
     maxDepth: opts.maxDepth ?? 256,
     maxArrayElements: opts.maxArrayElements ?? 1_000,
+    unknownIdentifier: opts.unknownIdentifier ?? "error",
   };
 
   const res = evalExpr(expr, ctx);
