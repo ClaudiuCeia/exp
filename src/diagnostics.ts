@@ -142,10 +142,40 @@ export const formatDiagnosticReport = (
 
     if (i === info.lineIndex) {
       const rawLine = lines[i] ?? "";
+      const gutter = " ".repeat(lineNoWidth);
+
+      const span = diag.span;
+      const hasSpan = span && span.end > span.start;
+      if (hasSpan) {
+        const startInfo = findLineInfo(input, span.start);
+        const endInfo = findLineInfo(input, Math.max(span.start, span.end - 1));
+
+        // Only render multi-span underline when the span stays on this line.
+        if (startInfo.lineIndex === info.lineIndex && endInfo.lineIndex === info.lineIndex) {
+          const rawPrefixStart = rawLine.slice(0, Math.max(0, startInfo.column - 1));
+          const rawPrefixEnd = rawLine.slice(0, Math.max(0, endInfo.column - 1));
+          const startPos = expandTabs(rawPrefixStart, tabWidth).length;
+          const endPos = expandTabs(rawPrefixEnd, tabWidth).length;
+
+          const lo = Math.min(startPos, endPos);
+          const hi = Math.max(startPos, endPos);
+          const width = Math.max(1, hi - lo + 1);
+
+          const underline = `${gutter} | ${" ".repeat(lo)}╰${"─".repeat(Math.max(0, width - 2))}╯`;
+
+          // Arrow originates from the center of the underline.
+          const center = lo + Math.floor(width / 2);
+          const arrow = `${gutter} | ${" ".repeat(center)}╰─▶ ${diag.message}`;
+
+          out.push(underline);
+          out.push(arrow);
+          continue;
+        }
+      }
+
+      // Fallback: point at a single column (index).
       const rawPrefix = rawLine.slice(0, Math.max(0, info.column - 1));
       const caretPos = expandTabs(rawPrefix, tabWidth).length;
-
-      const gutter = " ".repeat(lineNoWidth);
       const arrow = `${gutter} | ${" ".repeat(caretPos)}╰─▶ ${diag.message}`;
       out.push(arrow);
     }

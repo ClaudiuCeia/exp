@@ -48,3 +48,14 @@ Deno.test("formatDiagnosticReport renders unicode arrow with message", () => {
   assertEquals(lines[0], "1 | 1 +");
   assertEquals(lines[1], "  |    ╰─▶ expected expression at 1:4");
 });
+
+Deno.test("formatDiagnosticReport renders multispan underline with centered arrow", () => {
+  const out = formatDiagnosticReport("hello world", {
+    message: "boom",
+    span: { start: 6, end: 11 },
+  });
+  const lines = out.split("\n");
+  assertEquals(lines[0], "1 | hello world");
+  assertEquals(lines[1], "  |       ╰───╯");
+  assertEquals(lines[2], "  |         ╰─▶ boom");
+});
