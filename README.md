@@ -16,13 +16,6 @@ This is aimed at real "mini-language" use cases:
 - Full JavaScript parsing.
 - Executing untrusted code via `eval` / `new Function`.
 
-## Status
-
-Parser is implemented for a JS-like expression subset and returns a typed AST
-with spans.
-
-Safe evaluation is implemented (allow-listed environment + budgets).
-
 ## Supported syntax (today)
 
 Expressions:
