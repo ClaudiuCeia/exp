@@ -21,10 +21,6 @@ This is aimed at real "mini-language" use cases:
 Parser is implemented for a JS-like expression subset and returns a typed AST
 with spans.
 
-Not yet implemented (but aligned with the goals above):
-
-- pipeline operator (`|>`) / composable pipelines
-
 Safe evaluation is implemented (allow-listed environment + budgets).
 
 ## Supported syntax (today)
@@ -40,6 +36,8 @@ Expressions:
 - unary: `!`, `+`, `-`
 - binary (with precedence): `* / %`, `+ -`, `< <= > >=`, `== !=`, `&& ||`
 - conditional: `test ? consequent : alternate`
+- pipeline: `lhs |> fn` and `lhs |> fn(arg1, arg2, ...)` (desugars to `fn(lhs)`
+  / `fn(lhs, ...)`)
 
 String literals:
 
@@ -59,10 +57,6 @@ Chaining:
 
 - `user.profile.name`
 - `fn(1, 2).next(3).done`
-
-Roadmap-shaped (not implemented yet):
-
-- `input |> map(...) |> filter(...)`
 
 ## Safe evaluation
 

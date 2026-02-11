@@ -99,6 +99,7 @@ const comma = lx.symbol(",");
 type ExprLang = Readonly<{
   Expression: Parser<Expr>;
   Conditional: Parser<Expr>;
+  Pipeline: Parser<Expr>;
   LogicalOr: Parser<Expr>;
   LogicalAnd: Parser<Expr>;
   Equality: Parser<Expr>;
@@ -118,7 +119,7 @@ const ExpressionLang: ExprLang = createLanguage<ExprLang>({
     const q = lx.symbol("?");
     const colon = lx.symbol(":");
     return map(
-      seq(s.LogicalOr, optional(seq(q, s.Expression, colon, s.Expression))),
+      seq(s.Pipeline, optional(seq(q, s.Expression, colon, s.Expression))),
       ([test, rest]) => {
         if (!rest) return test;
         const [, consequent, , alternate] = rest;
@@ -131,6 +132,35 @@ const ExpressionLang: ExprLang = createLanguage<ExprLang>({
         };
       },
     );
+  },
+
+  Pipeline: (s) => {
+    const op = lx.symbol("|>");
+
+    const mkPipedCall = (start: number, rhs: Expr, lhs: Expr): Expr => {
+      if (rhs.kind === "call") {
+        return {
+          kind: "call",
+          callee: rhs.callee,
+          args: [lhs, ...rhs.args],
+          span: { start, end: rhs.span.end },
+        };
+      }
+
+      return {
+        kind: "call",
+        callee: rhs,
+        args: [lhs],
+        span: { start, end: rhs.span.end },
+      };
+    };
+
+    return map(seq(s.LogicalOr, many(seq(op, s.Postfix))), ([first, rest]) => {
+      return rest.reduce(
+        (acc, [, rhs]) => mkPipedCall(acc.span.start, rhs, acc),
+        first,
+      );
+    });
   },
 
   LogicalOr: (s) => {

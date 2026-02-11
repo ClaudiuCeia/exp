@@ -236,6 +236,21 @@ Deno.test("parseExpression parses ternary conditionals", () => {
   assertEquals(res.value.alternate.kind, "number");
 });
 
+Deno.test("parseExpression parses pipeline operator", () => {
+  const res = parseExpression("1 + 2 |> inc", { throwOnError: false });
+  assertEquals(res.success, true);
+  if (!res.success) return;
+
+  // Pipeline desugars to a call expression.
+  assertEquals(res.value.kind, "call");
+  if (res.value.kind !== "call") return;
+  assertEquals(res.value.callee.kind, "identifier");
+  if (res.value.callee.kind !== "identifier") return;
+  assertEquals(res.value.callee.name, "inc");
+  assertEquals(res.value.args.length, 1);
+  assertEquals(res.value.args[0].kind, "binary");
+});
+
 Deno.test("parseExpression fails on empty", () => {
   const res = parseExpression("   ", { throwOnError: false });
   assertEquals(res.success, false);

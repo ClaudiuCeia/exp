@@ -190,6 +190,37 @@ Deno.test("evaluateExpression allows structured return values", () => {
   assertEquals(res.value, 42);
 });
 
+Deno.test("evaluateExpression supports pipeline operator", () => {
+  const env = {
+    inc: (x: RuntimeValue) => (typeof x === "number" ? x + 1 : 0),
+    add: (x: RuntimeValue, y: RuntimeValue) =>
+      typeof x === "number" && typeof y === "number" ? x + y : 0,
+  };
+
+  const res1 = evaluateExpression("41 |> inc", { throwOnError: false, env });
+  assertEquals(res1.success, true);
+  if (!res1.success) return;
+  assertEquals(res1.value, 42);
+
+  const res2 = evaluateExpression("41 |> add(1)", { throwOnError: false, env });
+  assertEquals(res2.success, true);
+  if (!res2.success) return;
+  assertEquals(res2.value, 42);
+
+  const res3 = evaluateExpression("1 + 2 |> inc", { throwOnError: false, env });
+  assertEquals(res3.success, true);
+  if (!res3.success) return;
+  assertEquals(res3.value, 4);
+
+  const res4 = evaluateExpression("40 |> inc |> inc", {
+    throwOnError: false,
+    env,
+  });
+  assertEquals(res4.success, true);
+  if (!res4.success) return;
+  assertEquals(res4.value, 42);
+});
+
 Deno.test("evaluateExpression short-circuits &&", () => {
   const res = evaluateExpression("false && boom()", {
     throwOnError: false,
