@@ -31,7 +31,8 @@ export type BinaryOp =
   | ">"
   | ">="
   | "&&"
-  | "||";
+  | "||"
+  | "??";
 
 /**
  * Expression AST node.
@@ -43,6 +44,7 @@ export type Expr =
   | (NodeBase & { kind: "string"; value: string })
   | (NodeBase & { kind: "boolean"; value: boolean })
   | (NodeBase & { kind: "null" })
+  | (NodeBase & { kind: "undefined" })
   | (NodeBase & { kind: "identifier"; name: string })
   | (NodeBase & { kind: "array"; elements: Expr[] })
   | (NodeBase & { kind: "unary"; op: UnaryOp; expr: Expr })

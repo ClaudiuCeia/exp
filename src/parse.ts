@@ -94,7 +94,7 @@ const guard = <T>(
   };
 };
 
-const RESERVED = new Set(["true", "false", "null"]);
+const RESERVED = new Set(["true", "false", "null", "undefined"]);
 
 const lx = createLexer();
 const identStartChar = regex(/[_a-zA-Z]/, "identifier start");
@@ -216,8 +216,12 @@ const ExpressionLang: ExprLang = createLanguage<ExprLang>({
   },
 
   LogicalOr: (s) => {
-    const op = lx.symbol("||");
-    return chainl1(s.LogicalAnd, op, (l, _op, r) => mkBinary(l, "||", r));
+    const op = any(lx.symbol("||"), lx.symbol("??"));
+    return chainl1(
+      s.LogicalAnd,
+      op,
+      (l, o, r) => mkBinary(l, o as BinaryOp, r),
+    );
   },
 
   LogicalAnd: (s) => {
@@ -306,6 +310,7 @@ const ExpressionLang: ExprLang = createLanguage<ExprLang>({
     const kwTrue = keyword("true");
     const kwFalse = keyword("false");
     const kwNull = keyword("null");
+    const kwUndefined = keyword("undefined");
 
     const boolExpr: Parser<Expr> = any(
       map(kwTrue, (t) => ({
@@ -323,6 +328,11 @@ const ExpressionLang: ExprLang = createLanguage<ExprLang>({
     const nullExpr: Parser<Expr> = map(kwNull, (n) => ({
       kind: "null",
       span: { start: n.start, end: n.end },
+    } satisfies Expr));
+
+    const undefinedExpr: Parser<Expr> = map(kwUndefined, (u) => ({
+      kind: "undefined",
+      span: { start: u.start, end: u.end },
     } satisfies Expr));
 
     const numExpr: Parser<Expr> = map(numberSpan, (n) => ({
@@ -372,6 +382,7 @@ const ExpressionLang: ExprLang = createLanguage<ExprLang>({
         arrayExpr,
         boolExpr,
         nullExpr,
+        undefinedExpr,
         numExpr,
         strExpr,
         parenExpr,

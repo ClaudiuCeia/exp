@@ -200,6 +200,7 @@ type UnaryExpr = Extract<Expr, { kind: "unary" }>;
 type BinaryExpr = Extract<Expr, { kind: "binary" }>;
 type MemberExpr = Extract<Expr, { kind: "member" }>;
 type ConditionalExpr = Extract<Expr, { kind: "conditional" }>;
+type UndefinedExpr = Extract<Expr, { kind: "undefined" }>;
 
 const evalIdentifierExpr = (expr: IdentifierExpr, ctx: Ctx): EvalResult => {
   if (Object.hasOwn(ctx.env, expr.name)) {
@@ -227,6 +228,10 @@ const evalArrayExpr = (expr: ArrayExpr, ctx: Ctx): EvalResult => {
     out.push(r.value);
   }
   return { success: true, value: out };
+};
+
+const evalUndefinedExpr = (_expr: UndefinedExpr, _ctx: Ctx): EvalResult => {
+  return { success: true, value: undefined };
 };
 
 const evalUnaryExpr = (expr: UnaryExpr, ctx: Ctx): EvalResult => {
@@ -258,6 +263,13 @@ const evalBinaryExpr = (expr: BinaryExpr, ctx: Ctx): EvalResult => {
     const l = evalExpr(expr.left, ctx);
     if (!l.success) return l;
     if (isTruthy(l.value)) return l;
+    return evalExpr(expr.right, ctx);
+  }
+
+  if (expr.op === "??") {
+    const l = evalExpr(expr.left, ctx);
+    if (!l.success) return l;
+    if (l.value !== null && l.value !== undefined) return l;
     return evalExpr(expr.right, ctx);
   }
 
@@ -379,6 +391,8 @@ const evalExpr = (expr: Expr, ctx: Ctx): EvalResult => {
         return { success: true, value: expr.value };
       case "null":
         return { success: true, value: null };
+      case "undefined":
+        return evalUndefinedExpr(expr, ctx);
       case "identifier":
         return evalIdentifierExpr(expr, ctx);
       case "array":

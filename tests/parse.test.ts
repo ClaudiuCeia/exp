@@ -11,6 +11,22 @@ Deno.test("parseExpression parses numbers", () => {
   }
 });
 
+Deno.test("parseExpression parses undefined", () => {
+  const res = parseExpression("undefined", { throwOnError: false });
+  assertEquals(res.success, true);
+  if (!res.success) return;
+  assertEquals(res.value.kind, "undefined");
+});
+
+Deno.test("parseExpression parses nullish coalescing", () => {
+  const res = parseExpression("a ?? b", { throwOnError: false });
+  assertEquals(res.success, true);
+  if (!res.success) return;
+  assertEquals(res.value.kind, "binary");
+  if (res.value.kind !== "binary") return;
+  assertEquals(res.value.op, "??");
+});
+
 Deno.test("parseExpression parses quoted strings", () => {
   const res = parseExpression("'hi'", { throwOnError: false });
   assertEquals(res.success, true);

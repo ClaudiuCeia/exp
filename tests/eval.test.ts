@@ -20,11 +20,51 @@ Deno.test("evaluateExpression handles unary ops", () => {
 Deno.test("evaluateExpression supports string concatenation", () => {
   const res = evaluateExpression("'a' + 1 + true + null + undefined", {
     throwOnError: false,
-    env: { undefined: undefined },
   });
   assertEquals(res.success, true);
   if (!res.success) return;
   assertEquals(res.value, "a1truenullundefined");
+});
+
+Deno.test("evaluateExpression parses undefined as a literal", () => {
+  const res = evaluateExpression("undefined", { throwOnError: false });
+  assertEquals(res.success, true);
+  if (!res.success) return;
+  assertEquals(res.value, undefined);
+});
+
+Deno.test("evaluateExpression supports nullish coalescing (??)", () => {
+  const a = evaluateExpression("null ?? 1", { throwOnError: false });
+  assertEquals(a.success, true);
+  if (!a.success) return;
+  assertEquals(a.value, 1);
+
+  const b = evaluateExpression("undefined ?? 1", { throwOnError: false });
+  assertEquals(b.success, true);
+  if (!b.success) return;
+  assertEquals(b.value, 1);
+
+  const c = evaluateExpression("0 ?? 1", { throwOnError: false });
+  assertEquals(c.success, true);
+  if (!c.success) return;
+  assertEquals(c.value, 0);
+});
+
+Deno.test("evaluateExpression nullish coalescing is lazy", () => {
+  let called = 0;
+  const res = evaluateExpression("0 ?? boom()", {
+    throwOnError: false,
+    env: {
+      boom: () => {
+        called++;
+        return 123;
+      },
+    },
+  });
+  assertEquals(res.success, true);
+  if (!res.success) return;
+  assertEquals(res.value, 0);
+  assertEquals(called, 0);
 });
 
 Deno.test("evaluateExpression supports all numeric binary operators", () => {
