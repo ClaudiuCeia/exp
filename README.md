@@ -117,17 +117,30 @@ application DSLs.
 
 Expressions:
 
-- literals: numbers, strings, `true`, `false`, `null`
+- literals: numbers, strings, `true`, `false`, `null`, `undefined`
 - identifiers: `[A-Za-z_]` followed by `[A-Za-z0-9_]*` (with `true/false/null`
   reserved)
 - arrays: `[expr, expr, ...]`
 - grouping: `(expr)`
 - postfix chaining: `expr.ident` and `expr(arg1, arg2, ...)` (chainable)
 - unary: `!`, `+`, `-`
-- binary (with precedence): `* / %`, `+ -`, `< <= > >=`, `== !=`, `&& ||`
+- binary (with precedence): `* / %`, `+ -`, `< <= > >=`, `== !=`, `&& || ??`
 - conditional: `test ? consequent : alternate`
 - pipeline: `lhs |> fn` and `lhs |> fn(arg1, arg2, ...)` (desugars to `fn(lhs)`
   / `fn(lhs, ...)`)
+
+### Standard library (`std.*`)
+
+`std` is always available during evaluation (you don’t need to pass it in
+`env`). It exposes a small set of deterministic helpers:
+
+- `std.len(x)` — length of a string or array
+- math: `std.abs`, `std.min`, `std.max`, `std.clamp`, `std.floor`, `std.ceil`,
+  `std.round`, `std.trunc`, `std.sqrt`, `std.pow`
+- strings: `std.lower`, `std.upper`, `std.trim`, `std.startsWith`,
+  `std.endsWith`, `std.includes`, `std.slice`
+
+`env.std` is reserved and cannot be overridden.
 
 ### Equality semantics (`==` / `!=`)
 
@@ -239,16 +252,10 @@ if (res.success) {
 import { evaluateExpression } from "jsr:@claudiu-ceia/exp";
 
 const env = {
-  lower: (s: unknown) => (typeof s === "string" ? s.toLowerCase() : ""),
-  contains: (s: unknown, sub: unknown) => {
-    if (typeof s !== "string") throw new Error("contains: expected string");
-    if (typeof sub !== "string") throw new Error("contains: expected string");
-    return s.includes(sub);
-  },
   user: { plan: "Free" },
 };
 
-const res = evaluateExpression('contains(lower(user.plan), "free")', {
+const res = evaluateExpression('std.includes(std.lower(user.plan), "free")', {
   env,
   maxSteps: 5_000,
   throwOnError: false,
@@ -390,7 +397,7 @@ All AST nodes include `span: { start: number; end: number }`.
 
 `Expr` is a tagged union with these `kind`s:
 
-- `number`, `string`, `boolean`, `null`
+- `number`, `string`, `boolean`, `null`, `undefined`
 - `identifier`
 - `array`
 - `unary`

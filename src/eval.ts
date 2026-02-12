@@ -9,6 +9,8 @@ import {
   type RuntimeValue,
 } from "./runtime.ts";
 
+import { std } from "./std.ts";
+
 /** Options for `evaluateAst` and `evaluateExpression`. */
 export type EvalOptions = Readonly<{
   /**
@@ -428,8 +430,33 @@ export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
     return { success: false, error: e };
   }
 
+  if (Object.hasOwn(envRes.env, "std")) {
+    const e: EvalError = {
+      message: "env['std'] is reserved (stdlib is always available as std.*)",
+      steps: 0,
+    };
+    if (throwOnError) throw new ExpEvalError(e);
+    return { success: false, error: e };
+  }
+
+  const env = Object.create(null) as Record<string, RuntimeValue>;
+  Object.defineProperty(env, "std", {
+    value: std,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  });
+  for (const [k, v] of Object.entries(envRes.env)) {
+    Object.defineProperty(env, k, {
+      value: v,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+
   const ctx: Ctx = {
-    env: envRes.env,
+    env,
     steps: 0,
     maxSteps: opts.maxSteps ?? 10_000,
     depth: 0,

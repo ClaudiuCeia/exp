@@ -32,3 +32,5 @@ export type {
   RuntimePrimitive,
   RuntimeValue,
 } from "./src/runtime.ts";
+
+export { std } from "./src/std.ts";
