@@ -1,6 +1,6 @@
 import { buildCommand } from "@stricli/core";
 import { evaluateExpression } from "../src/eval.ts";
-import type { RuntimeValue } from "../src/eval.ts";
+import type { RuntimeValue } from "../src/runtime.ts";
 import { formatDiagnosticReport } from "../src/diagnostics.ts";
 
 export type Format = "json" | "inspect";

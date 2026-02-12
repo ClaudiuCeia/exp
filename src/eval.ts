@@ -1,32 +1,13 @@
 import type { Expr, Span } from "./ast/mod.ts";
 import { parseExpression } from "./parse.ts";
 
-/** Primitive runtime values supported by the evaluator. */
-export type RuntimePrimitive = undefined | null | boolean | number | string;
-
-/** A function callable from expressions (must accept/return `RuntimeValue`). */
-export type RuntimeFunction = (...args: RuntimeValue[]) => RuntimeValue;
-
-/** A `RuntimeValue` array. */
-export interface RuntimeArray extends Array<RuntimeValue> {}
-
-/** A plain object mapping string keys to `RuntimeValue`. */
-export interface RuntimeObject {
-  /** Own enumerable properties (prototype is ignored by the evaluator). */
-  [key: string]: RuntimeValue;
-}
-
-/**
- * Allowed runtime data model for evaluation.
- *
- * Values are validated at runtime when present in `env`, and function return
- * values are also validated.
- */
-export type RuntimeValue =
-  | RuntimePrimitive
-  | RuntimeArray
-  | RuntimeObject
-  | RuntimeFunction;
+import {
+  isPlainObject,
+  isRuntimeValue,
+  normalizeEnv,
+  type RuntimePrimitive,
+  type RuntimeValue,
+} from "./runtime.ts";
 
 /** Options for `evaluateAst` and `evaluateExpression`. */
 export type EvalOptions = Readonly<{
@@ -119,58 +100,6 @@ const FORBIDDEN_MEMBERS = new Set([
   "prototype",
   "constructor",
 ]);
-
-const isPlainObject = (value: unknown): value is Record<string, unknown> => {
-  if (value === null || typeof value !== "object") return false;
-  const proto = Object.getPrototypeOf(value);
-  return proto === Object.prototype || proto === null;
-};
-
-const isRuntimeValue = (value: unknown): value is RuntimeValue => {
-  if (
-    value === undefined ||
-    value === null ||
-    typeof value === "boolean" ||
-    typeof value === "number" ||
-    typeof value === "string" ||
-    typeof value === "function"
-  ) {
-    return true;
-  }
-
-  if (Array.isArray(value)) return value.every(isRuntimeValue);
-  if (isPlainObject(value)) {
-    return Object.values(value).every(isRuntimeValue);
-  }
-
-  return false;
-};
-
-const normalizeEnv = (
-  env: unknown,
-): { ok: true; env: Record<string, RuntimeValue> } | {
-  ok: false;
-  message: string;
-} => {
-  if (env === undefined) return { ok: true, env: {} };
-  if (!isPlainObject(env)) {
-    return {
-      ok: false,
-      message: "env must be a plain object (or proto-null object)",
-    };
-  }
-
-  for (const [k, v] of Object.entries(env)) {
-    if (!isRuntimeValue(v)) {
-      return {
-        ok: false,
-        message: `env['${k}'] is not a supported runtime value`,
-      };
-    }
-  }
-
-  return { ok: true, env: env as Record<string, RuntimeValue> };
-};
 
 const isTruthy = (v: RuntimeValue): boolean => {
   return !!v;

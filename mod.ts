@@ -24,9 +24,11 @@ export {
   evaluateExpression,
   type EvaluateExpressionOptions,
   ExpEvalError,
-  type RuntimeArray,
-  type RuntimeFunction,
-  type RuntimeObject,
-  type RuntimePrimitive,
-  type RuntimeValue,
 } from "./src/eval.ts";
+export type {
+  RuntimeArray,
+  RuntimeFunction,
+  RuntimeObject,
+  RuntimePrimitive,
+  RuntimeValue,
+} from "./src/runtime.ts";

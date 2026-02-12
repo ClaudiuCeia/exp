@@ -1,7 +1,7 @@
 import { assertEquals, assertMatch, assertThrows } from "@std/assert";
 import type { Expr } from "../src/ast/mod.ts";
 import { evaluateAst, evaluateExpression, ExpEvalError } from "../src/eval.ts";
-import type { RuntimeValue } from "../src/eval.ts";
+import type { RuntimeValue } from "../src/runtime.ts";
 
 Deno.test("evaluateExpression evaluates arithmetic", () => {
   const res = evaluateExpression("1 + 2 * 3", { throwOnError: false });
@@ -273,6 +273,81 @@ Deno.test("evaluateExpression rejects unsupported env values", () => {
   if (res.success) return;
   assertMatch(res.error.message, /env\['x'\] is not a supported runtime value/);
 });
+
+Deno.test(
+  "evaluateExpression rejects env accessor properties without invoking them",
+  () => {
+    let called = 0;
+    const env: Record<string, unknown> = {};
+    Object.defineProperty(env, "x", {
+      enumerable: true,
+      get() {
+        called++;
+        throw new Error("getter ran");
+      },
+    });
+
+    const res = evaluateExpression("x", {
+      throwOnError: false,
+      env: env as unknown as Record<string, RuntimeValue>,
+    });
+
+    assertEquals(res.success, false);
+    assertEquals(called, 0);
+    if (res.success) return;
+    assertMatch(res.error.message, /data property/);
+  },
+);
+
+Deno.test(
+  "evaluateExpression rejects nested accessor properties without invoking them",
+  () => {
+    let called = 0;
+    const user: Record<string, unknown> = {};
+    Object.defineProperty(user, "plan", {
+      enumerable: true,
+      get() {
+        called++;
+        throw new Error("getter ran");
+      },
+    });
+
+    const res = evaluateExpression("user.plan", {
+      throwOnError: false,
+      env: { user } as unknown as Record<string, RuntimeValue>,
+    });
+
+    assertEquals(res.success, false);
+    assertEquals(called, 0);
+    if (res.success) return;
+    assertMatch(res.error.message, /data property/);
+  },
+);
+
+Deno.test(
+  "evaluateExpression rejects array index accessor properties without invoking them",
+  () => {
+    let called = 0;
+    const xs: unknown[] = [1];
+    Object.defineProperty(xs, "0", {
+      enumerable: true,
+      get() {
+        called++;
+        throw new Error("getter ran");
+      },
+    });
+
+    const res = evaluateExpression("xs.length", {
+      throwOnError: false,
+      env: { xs } as unknown as Record<string, RuntimeValue>,
+    });
+
+    assertEquals(res.success, false);
+    assertEquals(called, 0);
+    if (res.success) return;
+    assertMatch(res.error.message, /data property/);
+  },
+);
 
 Deno.test("evaluateExpression allows structured return values", () => {
   const res = evaluateExpression("f().a + f().b.length", {
