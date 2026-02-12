@@ -214,7 +214,6 @@ export const replCommand = buildCommand({
   async func(this: CliContext, flags: CommonFlags) {
     let env = await resolveEnv(flags);
     const format = flags.format ?? "inspect";
-    let showDiagnostics = false;
 
     const help = () => {
       this.process.stdout.write(
@@ -223,7 +222,6 @@ export const replCommand = buildCommand({
           "  .exit\n" +
           "  .env (lists top-level env keys)\n" +
           "  .load <path> (load env module; default export or named export 'env')\n" +
-          "  .diag [on|off] (toggle detailed diagnostics w/ source snippets)\n" +
           "\nEnter an expression per line to evaluate.\n",
       );
     };
@@ -249,30 +247,6 @@ export const replCommand = buildCommand({
       if (line === ".exit") return "exit";
       if (line === ".help") {
         help();
-        if (opts.promptAfter) await prompt();
-        return "continue";
-      }
-
-      if (line === ".diag") {
-        showDiagnostics = !showDiagnostics;
-        this.process.stdout.write(
-          dim(`diagnostics: ${showDiagnostics ? "on" : "off"}\n`),
-        );
-        if (opts.promptAfter) await prompt();
-        return "continue";
-      }
-
-      if (line.startsWith(".diag ")) {
-        const arg = line.slice(".diag ".length).trim();
-        if (arg !== "on" && arg !== "off") {
-          this.process.stdout.write(dim("usage: .diag [on|off]\n"));
-          if (opts.promptAfter) await prompt();
-          return "continue";
-        }
-        showDiagnostics = arg === "on";
-        this.process.stdout.write(
-          dim(`diagnostics: ${showDiagnostics ? "on" : "off"}\n`),
-        );
         if (opts.promptAfter) await prompt();
         return "continue";
       }
@@ -313,28 +287,17 @@ export const replCommand = buildCommand({
       });
 
       if (!res.success) {
-        if (showDiagnostics) {
-          this.process.stdout.write(
-            red(
-              `${
-                formatDiagnosticReport(line, {
-                  message: res.error.message,
-                  index: res.error.index,
-                  span: res.error.span,
-                })
-              }\n`,
-            ),
-          );
-        } else {
-          // In REPL mode, avoid echoing the user's input line.
-          const col = res.error.index !== undefined
-            ? res.error.index + 1
-            : res.error.span
-            ? res.error.span.start + 1
-            : undefined;
-          const loc = col !== undefined ? dim(`(col ${col}) `) : "";
-          this.process.stdout.write(red(`${loc}${res.error.message}\n`));
-        }
+        this.process.stdout.write(
+          red(
+            `${
+              formatDiagnosticReport(line, {
+                message: res.error.message,
+                index: res.error.index,
+                span: res.error.span,
+              })
+            }\n`,
+          ),
+        );
       } else {
         this.process.stdout.write(formatValue(res.value, format));
       }
@@ -356,9 +319,7 @@ export const replCommand = buildCommand({
         while (true) {
           let lineRaw: string;
           try {
-            // Print prompt ourselves so ANSI doesn't confuse line editing.
-            process.stdout.write(promptText);
-            lineRaw = await rl.question("");
+            lineRaw = await rl.question(promptText);
           } catch {
             // Ctrl-D / stream closed.
             break;
