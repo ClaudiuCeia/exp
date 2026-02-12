@@ -65,10 +65,21 @@ export const std: Record<string, RuntimeValue> = Object.assign(
       expectString(s, "std.endsWith(s,suffix)").endsWith(
         expectString(suffix, "std.endsWith(s,suffix)"),
       ),
-    includes: (s: RuntimeValue, needle: RuntimeValue) =>
-      expectString(s, "std.includes(s,needle)").includes(
-        expectString(needle, "std.includes(s,needle)"),
-      ),
+    includes: (haystack: RuntimeValue, needle: RuntimeValue) => {
+      if (typeof haystack === "string") {
+        return haystack.includes(
+          expectString(needle, "std.includes(haystack,needle)"),
+        );
+      }
+
+      if (Array.isArray(haystack)) {
+        return haystack.some((x) => x === needle);
+      }
+
+      throw new Error(
+        "std.includes(haystack,needle) expects (string,string) or (array,value)",
+      );
+    },
     slice: (s: RuntimeValue, start: RuntimeValue, end?: RuntimeValue) => {
       const str = expectString(s, "std.slice(s,start,end?)");
       const a = expectNumber(start, "std.slice(s,start,end?)");

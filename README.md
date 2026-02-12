@@ -140,6 +140,9 @@ Expressions:
 - strings: `std.lower`, `std.upper`, `std.trim`, `std.startsWith`,
   `std.endsWith`, `std.includes`, `std.slice`
 
+Note: `std.includes(haystack, needle)` works for both strings (substring check)
+and arrays (membership check).
+
 `env.std` is reserved and cannot be overridden.
 
 ### Equality semantics (`==` / `!=`)

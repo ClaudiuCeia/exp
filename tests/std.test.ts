@@ -42,6 +42,22 @@ Deno.test("std string helpers work", () => {
   assertEquals(res.value, "HI");
 });
 
+Deno.test("std.includes supports array membership", () => {
+  const a = evaluateExpression("std.includes([1,2,3], 2)", {
+    throwOnError: false,
+  });
+  assertEquals(a.success, true);
+  if (!a.success) return;
+  assertEquals(a.value, true);
+
+  const b = evaluateExpression("std.includes(['a','b'], 'c')", {
+    throwOnError: false,
+  });
+  assertEquals(b.success, true);
+  if (!b.success) return;
+  assertEquals(b.value, false);
+});
+
 Deno.test("env cannot override std", () => {
   const res = evaluateExpression("std.len('a')", {
     throwOnError: false,
