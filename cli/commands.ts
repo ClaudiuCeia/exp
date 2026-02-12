@@ -2,8 +2,6 @@ import { buildCommand } from "@stricli/core";
 import { evaluateExpression } from "../src/eval.ts";
 import type { RuntimeValue } from "../src/runtime.ts";
 import { formatDiagnosticReport } from "../src/diagnostics.ts";
-import { createInterface } from "node:readline/promises";
-import process from "node:process";
 
 export type Format = "json" | "inspect";
 
@@ -22,23 +20,6 @@ type CliContext = {
 };
 
 const encoder = new TextEncoder();
-
-const supportsColor = (): boolean => {
-  try {
-    return Deno.stdout.isTerminal();
-  } catch {
-    return false;
-  }
-};
-
-const colorize = (open: string, s: string): string => {
-  return supportsColor() ? `\x1b[${open}m${s}\x1b[0m` : s;
-};
-
-const dim = (s: string): string => colorize("2", s);
-const cyan = (s: string): string => colorize("36", s);
-const green = (s: string): string => colorize("32", s);
-const red = (s: string): string => colorize("31", s);
 
 const writeStdout = async (s: string): Promise<void> => {
   await Deno.stdout.write(encoder.encode(s));
@@ -228,10 +209,12 @@ export const replCommand = buildCommand({
 
     help();
 
-    const promptText = cyan("> ");
+    const decoder = new TextDecoder();
+    const buf = new Uint8Array(1024 * 64);
+    let carry = "";
 
     const prompt = async () => {
-      await writeStdout(promptText);
+      await writeStdout("> ");
     };
 
     const handleLine = async (
@@ -261,7 +244,7 @@ export const replCommand = buildCommand({
       if (line.startsWith(".load ")) {
         const p = line.slice(".load ".length).trim();
         if (!p) {
-          this.process.stdout.write(dim("usage: .load <path>\n"));
+          this.process.stdout.write("usage: .load <path>\n");
           if (opts.promptAfter) await prompt();
           return "continue";
         }
@@ -269,11 +252,11 @@ export const replCommand = buildCommand({
         try {
           env = await loadEnvFromModule(p);
           this.process.stdout.write(
-            green(`loaded env (${Object.keys(env).length} keys)\n`),
+            `loaded env (${Object.keys(env).length} keys)\n`,
           );
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
-          this.process.stdout.write(red(`${msg}\n`));
+          this.process.stdout.write(`${msg}\n`);
         }
 
         if (opts.promptAfter) await prompt();
@@ -288,15 +271,13 @@ export const replCommand = buildCommand({
 
       if (!res.success) {
         this.process.stdout.write(
-          red(
-            `${
-              formatDiagnosticReport(line, {
-                message: res.error.message,
-                index: res.error.index,
-                span: res.error.span,
-              })
-            }\n`,
-          ),
+          `${
+            formatDiagnosticReport(line, {
+              message: res.error.message,
+              index: res.error.index,
+              span: res.error.span,
+            })
+          }\n`,
         );
       } else {
         this.process.stdout.write(formatValue(res.value, format));
@@ -305,40 +286,6 @@ export const replCommand = buildCommand({
       if (opts.promptAfter) await prompt();
       return "continue";
     };
-
-    // Interactive mode: use a real line editor so arrow keys work.
-    if (Deno.stdin.isTerminal() && Deno.stdout.isTerminal()) {
-      const rl = createInterface({
-        input: process.stdin,
-        output: process.stdout,
-        terminal: true,
-        historySize: 1_000,
-      });
-
-      try {
-        while (true) {
-          let lineRaw: string;
-          try {
-            lineRaw = await rl.question(promptText);
-          } catch {
-            // Ctrl-D / stream closed.
-            break;
-          }
-
-          const r = await handleLine(lineRaw, { promptAfter: false });
-          if (r === "exit") break;
-        }
-      } finally {
-        rl.close();
-      }
-
-      return;
-    }
-
-    // Non-interactive fallback (e.g. piped input): old buffered reader.
-    const decoder = new TextDecoder();
-    const buf = new Uint8Array(1024 * 64);
-    let carry = "";
 
     await prompt();
 
