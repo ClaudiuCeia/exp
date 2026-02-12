@@ -192,6 +192,172 @@ const getMember = (obj: RuntimeValue, prop: string): RuntimeValue => {
   return undefined;
 };
 
+type CallExpr = Extract<Expr, { kind: "call" }>;
+
+type IdentifierExpr = Extract<Expr, { kind: "identifier" }>;
+type ArrayExpr = Extract<Expr, { kind: "array" }>;
+type UnaryExpr = Extract<Expr, { kind: "unary" }>;
+type BinaryExpr = Extract<Expr, { kind: "binary" }>;
+type MemberExpr = Extract<Expr, { kind: "member" }>;
+type ConditionalExpr = Extract<Expr, { kind: "conditional" }>;
+
+const evalIdentifierExpr = (expr: IdentifierExpr, ctx: Ctx): EvalResult => {
+  if (Object.hasOwn(ctx.env, expr.name)) {
+    return { success: true, value: ctx.env[expr.name] };
+  }
+  if (ctx.unknownIdentifier === "undefined") {
+    return { success: true, value: undefined };
+  }
+  return evalError(
+    `unknown identifier '${expr.name}'`,
+    expr.span,
+    ctx.steps,
+  );
+};
+
+const evalArrayExpr = (expr: ArrayExpr, ctx: Ctx): EvalResult => {
+  if (expr.elements.length > ctx.maxArrayElements) {
+    return evalError("array literal too large", expr.span, ctx.steps);
+  }
+
+  const out: RuntimeValue[] = [];
+  for (const el of expr.elements) {
+    const r = evalExpr(el, ctx);
+    if (!r.success) return r;
+    out.push(r.value);
+  }
+  return { success: true, value: out };
+};
+
+const evalUnaryExpr = (expr: UnaryExpr, ctx: Ctx): EvalResult => {
+  const r = evalExpr(expr.expr, ctx);
+  if (!r.success) return r;
+  const v = r.value;
+
+  switch (expr.op) {
+    case "!":
+      return { success: true, value: !isTruthy(v) };
+    case "+":
+      return { success: true, value: toNumber(v) };
+    case "-":
+      return { success: true, value: -toNumber(v) };
+  }
+
+  return evalError("unknown unary operator", expr.span, ctx.steps);
+};
+
+const evalBinaryExpr = (expr: BinaryExpr, ctx: Ctx): EvalResult => {
+  // Short-circuiting operators must be lazy.
+  if (expr.op === "&&") {
+    const l = evalExpr(expr.left, ctx);
+    if (!l.success) return l;
+    if (!isTruthy(l.value)) return l;
+    return evalExpr(expr.right, ctx);
+  }
+  if (expr.op === "||") {
+    const l = evalExpr(expr.left, ctx);
+    if (!l.success) return l;
+    if (isTruthy(l.value)) return l;
+    return evalExpr(expr.right, ctx);
+  }
+
+  const l = evalExpr(expr.left, ctx);
+  if (!l.success) return l;
+  const r = evalExpr(expr.right, ctx);
+  if (!r.success) return r;
+
+  const a = l.value;
+  const b = r.value;
+
+  switch (expr.op) {
+    case "+":
+      return {
+        success: true,
+        value: typeof a === "string" || typeof b === "string"
+          ? toString(a) + toString(b)
+          : toNumber(a) + toNumber(b),
+      };
+    case "-":
+      return { success: true, value: toNumber(a) - toNumber(b) };
+    case "*":
+      return { success: true, value: toNumber(a) * toNumber(b) };
+    case "/":
+      return { success: true, value: toNumber(a) / toNumber(b) };
+    case "%":
+      return { success: true, value: toNumber(a) % toNumber(b) };
+    case "<":
+      return { success: true, value: toNumber(a) < toNumber(b) };
+    case "<=":
+      return { success: true, value: toNumber(a) <= toNumber(b) };
+    case ">":
+      return { success: true, value: toNumber(a) > toNumber(b) };
+    case ">=":
+      return { success: true, value: toNumber(a) >= toNumber(b) };
+    case "==":
+      return { success: true, value: looseEqualSafe(a, b) };
+    case "!=":
+      return { success: true, value: !looseEqualSafe(a, b) };
+  }
+
+  return evalError("unknown binary operator", expr.span, ctx.steps);
+};
+
+const evalMemberExpr = (expr: MemberExpr, ctx: Ctx): EvalResult => {
+  const obj = evalExpr(expr.object, ctx);
+  if (!obj.success) return obj;
+  const value = getMember(obj.value, expr.property);
+  return { success: true, value };
+};
+
+const evalCallExpr = (expr: CallExpr, ctx: Ctx): EvalResult => {
+  let fn: RuntimeValue;
+  let receiver: RuntimeValue | undefined;
+
+  if (expr.callee.kind === "member") {
+    const obj = evalExpr(expr.callee.object, ctx);
+    if (!obj.success) return obj;
+    receiver = obj.value;
+    fn = getMember(obj.value, expr.callee.property);
+  } else {
+    const callee = evalExpr(expr.callee, ctx);
+    if (!callee.success) return callee;
+    fn = callee.value;
+  }
+
+  if (typeof fn !== "function") {
+    return evalError(
+      "attempted to call a non-function",
+      expr.span,
+      ctx.steps,
+    );
+  }
+
+  const args: RuntimeValue[] = [];
+  for (const a of expr.args) {
+    const ar = evalExpr(a, ctx);
+    if (!ar.success) return ar;
+    args.push(ar.value);
+  }
+
+  const out = receiver === undefined ? fn(...args) : fn.apply(receiver, args);
+  if (!isRuntimeValue(out)) {
+    return evalError(
+      "function returned an unsupported value",
+      expr.span,
+      ctx.steps,
+    );
+  }
+  return { success: true, value: out };
+};
+
+const evalConditionalExpr = (expr: ConditionalExpr, ctx: Ctx): EvalResult => {
+  const test = evalExpr(expr.test, ctx);
+  if (!test.success) return test;
+  return isTruthy(test.value)
+    ? evalExpr(expr.consequent, ctx)
+    : evalExpr(expr.alternate, ctx);
+};
+
 const evalExpr = (expr: Expr, ctx: Ctx): EvalResult => {
   const budget = bump(ctx, expr.span);
   if (budget) return budget;
@@ -214,156 +380,20 @@ const evalExpr = (expr: Expr, ctx: Ctx): EvalResult => {
       case "null":
         return { success: true, value: null };
       case "identifier":
-        if (Object.hasOwn(ctx.env, expr.name)) {
-          return { success: true, value: ctx.env[expr.name] };
-        }
-        if (ctx.unknownIdentifier === "undefined") {
-          return { success: true, value: undefined };
-        }
-        return evalError(
-          `unknown identifier '${expr.name}'`,
-          expr.span,
-          ctx.steps,
-        );
-      case "array": {
-        if (expr.elements.length > ctx.maxArrayElements) {
-          return evalError("array literal too large", expr.span, ctx.steps);
-        }
-        const out: RuntimeValue[] = [];
-        for (const el of expr.elements) {
-          const r = evalExpr(el, ctx);
-          if (!r.success) return r;
-          out.push(r.value);
-        }
-        return { success: true, value: out };
-      }
-      case "unary": {
-        const span = expr.span;
-        const r = evalExpr(expr.expr, ctx);
-        if (!r.success) return r;
-        const v = r.value;
-        switch (expr.op) {
-          case "!":
-            return { success: true, value: !isTruthy(v) };
-          case "+":
-            return { success: true, value: toNumber(v) };
-          case "-":
-            return { success: true, value: -toNumber(v) };
-        }
-
-        return evalError("unknown unary operator", span, ctx.steps);
-      }
-      case "binary": {
-        const span = expr.span;
-        // Short-circuiting operators must be lazy.
-        if (expr.op === "&&") {
-          const l = evalExpr(expr.left, ctx);
-          if (!l.success) return l;
-          if (!isTruthy(l.value)) return l;
-          return evalExpr(expr.right, ctx);
-        }
-        if (expr.op === "||") {
-          const l = evalExpr(expr.left, ctx);
-          if (!l.success) return l;
-          if (isTruthy(l.value)) return l;
-          return evalExpr(expr.right, ctx);
-        }
-
-        const l = evalExpr(expr.left, ctx);
-        if (!l.success) return l;
-        const r = evalExpr(expr.right, ctx);
-        if (!r.success) return r;
-
-        const a = l.value;
-        const b = r.value;
-
-        switch (expr.op) {
-          case "+":
-            return {
-              success: true,
-              value: typeof a === "string" || typeof b === "string"
-                ? toString(a) + toString(b)
-                : toNumber(a) + toNumber(b),
-            };
-          case "-":
-            return { success: true, value: toNumber(a) - toNumber(b) };
-          case "*":
-            return { success: true, value: toNumber(a) * toNumber(b) };
-          case "/":
-            return { success: true, value: toNumber(a) / toNumber(b) };
-          case "%":
-            return { success: true, value: toNumber(a) % toNumber(b) };
-          case "<":
-            return { success: true, value: toNumber(a) < toNumber(b) };
-          case "<=":
-            return { success: true, value: toNumber(a) <= toNumber(b) };
-          case ">":
-            return { success: true, value: toNumber(a) > toNumber(b) };
-          case ">=":
-            return { success: true, value: toNumber(a) >= toNumber(b) };
-          case "==":
-            return { success: true, value: looseEqualSafe(a, b) };
-          case "!=":
-            return { success: true, value: !looseEqualSafe(a, b) };
-        }
-
-        return evalError("unknown binary operator", span, ctx.steps);
-      }
-      case "member": {
-        const obj = evalExpr(expr.object, ctx);
-        if (!obj.success) return obj;
-        const value = getMember(obj.value, expr.property);
-        return { success: true, value };
-      }
+        return evalIdentifierExpr(expr, ctx);
+      case "array":
+        return evalArrayExpr(expr, ctx);
+      case "unary":
+        return evalUnaryExpr(expr, ctx);
+      case "binary":
+        return evalBinaryExpr(expr, ctx);
+      case "member":
+        return evalMemberExpr(expr, ctx);
       case "call": {
-        let fn: RuntimeValue;
-        let receiver: RuntimeValue | undefined;
-
-        if (expr.callee.kind === "member") {
-          const obj = evalExpr(expr.callee.object, ctx);
-          if (!obj.success) return obj;
-          receiver = obj.value;
-          fn = getMember(obj.value, expr.callee.property);
-        } else {
-          const callee = evalExpr(expr.callee, ctx);
-          if (!callee.success) return callee;
-          fn = callee.value;
-        }
-
-        if (typeof fn !== "function") {
-          return evalError(
-            "attempted to call a non-function",
-            expr.span,
-            ctx.steps,
-          );
-        }
-
-        const args: RuntimeValue[] = [];
-        for (const a of expr.args) {
-          const ar = evalExpr(a, ctx);
-          if (!ar.success) return ar;
-          args.push(ar.value);
-        }
-
-        const out = receiver === undefined
-          ? fn(...args)
-          : fn.apply(receiver, args);
-        if (!isRuntimeValue(out)) {
-          return evalError(
-            "function returned an unsupported value",
-            expr.span,
-            ctx.steps,
-          );
-        }
-        return { success: true, value: out };
+        return evalCallExpr(expr, ctx);
       }
-      case "conditional": {
-        const test = evalExpr(expr.test, ctx);
-        if (!test.success) return test;
-        return isTruthy(test.value)
-          ? evalExpr(expr.consequent, ctx)
-          : evalExpr(expr.alternate, ctx);
-      }
+      case "conditional":
+        return evalConditionalExpr(expr, ctx);
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
