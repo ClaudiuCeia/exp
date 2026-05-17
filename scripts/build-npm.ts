@@ -35,7 +35,7 @@ await build({
       url: "git+https://github.com/ClaudiuCeia/exp.git",
     },
     dependencies: {
-      "@claudiu-ceia/combine": "^0.2.8",
+      "@claudiu-ceia/combine": "^0.3.0",
     },
   },
   postBuild() {

@@ -1,7 +1,6 @@
 # exp
 
 [![JSR](https://jsr.io/badges/@claudiu-ceia/exp)](https://jsr.io/@claudiu-ceia/exp)
-[![JSR Score](https://jsr.io/badges/@claudiu-ceia/exp/score)](https://jsr.io/@claudiu-ceia/exp/score)
 [![CI](https://github.com/ClaudiuCeia/exp/actions/workflows/ci.yml/badge.svg)](https://github.com/ClaudiuCeia/exp/actions/workflows/ci.yml)
 
 A small, deterministic expression language: parse into a typed AST with spans,
