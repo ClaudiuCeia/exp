@@ -22,6 +22,7 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: 24
+          package-manager-cache: false
 
       - name: Setup Deno
         uses: denoland/setup-deno@v2
@@ -79,6 +80,7 @@ jobs:
         with:
           node-version: 24
           registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
 
       - name: Setup Deno
         uses: denoland/setup-deno@v2
@@ -89,9 +91,7 @@ jobs:
         run: deno task build:npm
 
       - name: Publish to npm
-        run: npm publish ./npm --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish ./npm --access public
 
   github-release:
     runs-on: ubuntu-latest
