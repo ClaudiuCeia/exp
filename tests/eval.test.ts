@@ -771,3 +771,61 @@ Deno.test("evaluateAst returns errors for unknown operators (defensive)", () => 
   if (br.success) return;
   assertMatch(br.error.message, /unknown binary operator/);
 });
+
+Deno.test("evaluateAst rejects malformed nodes in non-throwing mode", () => {
+  const cases = [
+    null,
+    { kind: "unknown", span: { start: 0, end: 0 } },
+    { kind: "number", value: new Date(), span: { start: 0, end: 1 } },
+    { kind: "array", elements: null, span: { start: 0, end: 1 } },
+  ];
+
+  for (const value of cases) {
+    const res = evaluateAst(value as unknown as Expr, { throwOnError: false });
+    assertEquals(res.success, false);
+    if (res.success) continue;
+    assertMatch(res.error.message, /invalid AST/);
+  }
+});
+
+Deno.test("evaluateAst rejects accessors without invoking them", () => {
+  let called = 0;
+  const expr: Record<string, unknown> = {
+    span: { start: 0, end: 1 },
+  };
+  Object.defineProperty(expr, "kind", {
+    enumerable: true,
+    get() {
+      called++;
+      return "number";
+    },
+  });
+
+  const res = evaluateAst(expr as unknown as Expr, { throwOnError: false });
+  assertEquals(res.success, false);
+  assertEquals(called, 0);
+  if (res.success) return;
+  assertMatch(res.error.message, /data property/);
+});
+
+Deno.test("evaluateAst rejects cyclic ASTs", () => {
+  const expr: Record<string, unknown> = {
+    kind: "unary",
+    op: "!",
+    span: { start: 0, end: 1 },
+  };
+  expr.expr = expr;
+
+  const res = evaluateAst(expr as unknown as Expr, { throwOnError: false });
+  assertEquals(res.success, false);
+  if (res.success) return;
+  assertMatch(res.error.message, /cycle detected/);
+});
+
+Deno.test("evaluateAst wraps malformed AST errors in throwing mode", () => {
+  assertThrows(
+    () => evaluateAst(null as unknown as Expr),
+    ExpEvalError,
+    "invalid AST",
+  );
+});
