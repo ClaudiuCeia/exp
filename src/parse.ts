@@ -457,8 +457,8 @@ const checkNesting = (
     if (ch === "(" || ch === "[") {
       frames.push({ delimiter: ch, conditionals: 0 });
     } else if (
-      (ch === ")" && frames.at(-1)?.delimiter === "(") ||
-      (ch === "]" && frames.at(-1)?.delimiter === "[")
+      (ch === ")" && frames[frames.length - 1].delimiter === "(") ||
+      (ch === "]" && frames[frames.length - 1].delimiter === "[")
     ) {
       frames.pop();
     } else if (ch === ",") {
