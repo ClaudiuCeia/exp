@@ -49,8 +49,8 @@ Install:
 # Deno
 deno add jsr:@claudiu-ceia/exp
 
-# Node/Bun (via JSR)
-npx jsr add @claudiu-ceia/exp
+# Node/Bun
+npm install @claudiu-ceia/exp
 ```
 
 Evaluate (non-throwing) and render a pretty diagnostic on failure:
@@ -284,7 +284,7 @@ deno add jsr:@claudiu-ceia/exp
 This package is published for npm via a generated build.
 
 ```sh
-npx jsr add @claudiu-ceia/exp
+npm install @claudiu-ceia/exp
 ```
 
 Then:
@@ -337,7 +337,7 @@ Parse a single expression into a typed AST.
 #### `ParseError`
 
 - `message: string` — compact parser error message
-- `index: number` — byte index into the input string
+- `index: number` — UTF-16 code-unit index into the input string
 
 ### `evaluateExpression(input, opts?)`
 
@@ -443,8 +443,8 @@ When you enable throwing (the default), you’ll get typed errors.
   - `steps?: number`
   - `index?: number`
 
-This makes it easy to render caret diagnostics from either a byte `index` or an
-AST `span`.
+This makes it easy to render caret diagnostics from either a UTF-16 code-unit
+`index` or an AST `span`.
 
 Example caret formatter:
 
@@ -473,7 +473,8 @@ Diagnostics helpers exported from `mod.ts`:
 - `formatDiagnosticCaret` (prefers `index`, falls back to `span.start`)
 - `formatDiagnosticReport` (Elm/OCaml-inspired report output)
 
-- `ExpParseError`: includes `index` (byte index into the input string)
+- `ExpParseError`: includes `index` (UTF-16 code-unit index into the input
+  string)
 - `ExpEvalError`: includes `span` (AST span) and `steps` (budget counter)
 
 If you prefer non-throwing control flow, use `throwOnError: false` and inspect

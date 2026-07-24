@@ -49,7 +49,7 @@ const DEFAULT_MAX_NODES = 10_000;
 /**
  * A parse failure.
  *
- * `index` is a byte index into the input string.
+ * `index` is a UTF-16 code-unit index into the input string.
  */
 export type ParseError = Readonly<{
   message: string;

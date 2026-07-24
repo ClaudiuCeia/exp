@@ -1,5 +1,5 @@
 /**
- * Byte span (half-open) into the original input.
+ * UTF-16 code-unit span (half-open) into the original input.
  *
  * - `start` is inclusive
  * - `end` is exclusive
