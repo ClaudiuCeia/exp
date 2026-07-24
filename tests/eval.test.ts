@@ -295,6 +295,67 @@ Deno.test("evaluateExpression rejects unsupported function return values", () =>
   assertMatch(res.error.message, /unsupported value/);
 });
 
+Deno.test("evaluateExpression does not expose hidden function return values", () => {
+  const value = Object.create(null);
+  Object.defineProperty(value, "secret", {
+    value: new Date(),
+    enumerable: false,
+  });
+
+  const res = evaluateExpression("f().secret", {
+    throwOnError: false,
+    env: { f: () => value },
+  });
+
+  assertEquals(res.success, true);
+  if (!res.success) return;
+  assertEquals(res.value, undefined);
+});
+
+Deno.test("evaluateExpression does not invoke hidden function return getters", () => {
+  let called = 0;
+  const value = Object.create(null);
+  Object.defineProperty(value, "secret", {
+    enumerable: false,
+    get() {
+      called++;
+      throw new Error("getter ran");
+    },
+  });
+
+  const res = evaluateExpression("f().secret", {
+    throwOnError: false,
+    env: { f: () => value },
+  });
+
+  assertEquals(res.success, true);
+  assertEquals(called, 0);
+  if (!res.success) return;
+  assertEquals(res.value, undefined);
+});
+
+Deno.test("evaluateExpression rejects returned accessors without invoking them", () => {
+  let called = 0;
+  const value = Object.create(null);
+  Object.defineProperty(value, "secret", {
+    enumerable: true,
+    get() {
+      called++;
+      throw new Error("getter ran");
+    },
+  });
+
+  const res = evaluateExpression("f()", {
+    throwOnError: false,
+    env: { f: () => value },
+  });
+
+  assertEquals(res.success, false);
+  assertEquals(called, 0);
+  if (res.success) return;
+  assertMatch(res.error.message, /unsupported value/);
+});
+
 Deno.test("evaluateExpression rejects unsupported env values", () => {
   assertThrows(() => {
     evaluateExpression("x", {

@@ -187,8 +187,12 @@ const getMember = (obj: RuntimeValue, prop: string): RuntimeValue => {
   }
 
   if (isPlainObject(obj)) {
-    if (!Object.hasOwn(obj, prop)) return undefined;
-    return (obj as Record<string, RuntimeValue>)[prop];
+    const descriptor = Object.getOwnPropertyDescriptor(obj, prop);
+    if (descriptor === undefined || !descriptor.enumerable) return undefined;
+    if (!("value" in descriptor)) {
+      throw new Error("member must be an enumerable data property");
+    }
+    return descriptor.value as RuntimeValue;
   }
 
   return undefined;
