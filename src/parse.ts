@@ -1,9 +1,9 @@
 import {
   any,
   chainl1,
-  createLanguage,
   createLexer,
   cut,
+  defineLanguage,
   eof,
   failure,
   formatErrorCompact,
@@ -146,22 +146,22 @@ const rbrack = lx.lexeme(map(withSpan(str("]")), ({ end }) => end));
 const comma = lx.symbol(",");
 
 type ExprLang = Readonly<{
-  Expression: Parser<Expr>;
-  Conditional: Parser<Expr>;
-  Pipeline: Parser<Expr>;
-  LogicalOr: Parser<Expr>;
-  LogicalAnd: Parser<Expr>;
-  Equality: Parser<Expr>;
-  Comparison: Parser<Expr>;
-  Additive: Parser<Expr>;
-  Multiplicative: Parser<Expr>;
-  Unary: Parser<Expr>;
-  Postfix: Parser<Expr>;
-  Primary: Parser<Expr>;
-  File: Parser<Expr>;
+  Expression: Expr;
+  Conditional: Expr;
+  Pipeline: Expr;
+  LogicalOr: Expr;
+  LogicalAnd: Expr;
+  Equality: Expr;
+  Comparison: Expr;
+  Additive: Expr;
+  Multiplicative: Expr;
+  Unary: Expr;
+  Postfix: Expr;
+  Primary: Expr;
+  File: Expr;
 }>;
 
-const ExpressionLang: ExprLang = createLanguage<ExprLang>({
+const ExpressionLang = defineLanguage<ExprLang>({
   Expression: (s) => s.Conditional,
 
   Conditional: (s) => {
@@ -298,10 +298,7 @@ const ExpressionLang: ExprLang = createLanguage<ExprLang>({
       },
     );
 
-    const args = map(
-      sepBy(s.Expression, comma),
-      (xs) => xs.filter((x): x is Expr => typeof x !== "string"),
-    );
+    const args = sepBy(s.Expression, comma);
 
     const callOp = map(
       seq(lparen, args, cut(rparen, "closing ')'")),
@@ -369,10 +366,7 @@ const ExpressionLang: ExprLang = createLanguage<ExprLang>({
     const arrayExpr: Parser<Expr> = map(
       seq(
         lbrack,
-        map(
-          sepBy(s.Expression, comma),
-          (xs) => xs.filter((x): x is Expr => typeof x !== "string"),
-        ),
+        sepBy(s.Expression, comma),
         rbrack,
       ),
       ([start, elements, end]) => ({
