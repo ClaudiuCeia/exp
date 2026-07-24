@@ -174,6 +174,17 @@ const evalError = (
   steps?: number,
 ): EvalResult => ({ success: false, error: { message, span, steps } });
 
+const readEvaluationLimit = (
+  value: number | undefined,
+  fallback: number,
+  name: string,
+): number | string => {
+  const limit = value ?? fallback;
+  return Number.isSafeInteger(limit) && limit >= 0
+    ? limit
+    : `${name} must be a non-negative safe integer`;
+};
+
 const bump = (ctx: Ctx, span?: Span): EvalResult | null => {
   ctx.steps++;
   if (ctx.steps > ctx.maxSteps) {
@@ -658,11 +669,28 @@ const validateAst = (
 /** Evaluate a pre-parsed AST. */
 export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
   const throwOnError = opts.throwOnError ?? true;
-  const maxSteps = opts.maxSteps ?? 10_000;
-  const maxDepth = opts.maxDepth ?? 256;
-  const maxArrayElements = opts.maxArrayElements ?? 1_000;
-  const maxRuntimeDepth = opts.maxRuntimeDepth ?? 64;
-  const maxRuntimeEntries = opts.maxRuntimeEntries ?? 10_000;
+  const limitValues = [
+    readEvaluationLimit(opts.maxSteps, 10_000, "maxSteps"),
+    readEvaluationLimit(opts.maxDepth, 256, "maxDepth"),
+    readEvaluationLimit(opts.maxArrayElements, 1_000, "maxArrayElements"),
+    readEvaluationLimit(opts.maxRuntimeDepth, 64, "maxRuntimeDepth"),
+    readEvaluationLimit(opts.maxRuntimeEntries, 10_000, "maxRuntimeEntries"),
+  ] as const;
+  const limitError = limitValues.find((value): value is string =>
+    typeof value === "string"
+  );
+  if (limitError !== undefined) {
+    const error: EvalError = { message: limitError, steps: 0 };
+    if (throwOnError) throw new ExpEvalError(error);
+    return { success: false, error };
+  }
+  const [
+    maxSteps,
+    maxDepth,
+    maxArrayElements,
+    maxRuntimeDepth,
+    maxRuntimeEntries,
+  ] = limitValues as readonly number[];
 
   const astResult = validateAst(
     expr as unknown,

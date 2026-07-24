@@ -722,6 +722,27 @@ Deno.test("evaluateExpression enforces recursion depth budgets", () => {
   assertMatch(res.error.message, /recursion limit exceeded/);
 });
 
+Deno.test("evaluateExpression rejects invalid evaluation budgets", () => {
+  const cases = [
+    { maxSteps: Number.NaN },
+    { maxDepth: Number.POSITIVE_INFINITY },
+    { maxArrayElements: -1 },
+    { maxRuntimeDepth: 1.5 },
+    { maxRuntimeEntries: -1 },
+  ];
+
+  for (const options of cases) {
+    const res = evaluateExpression("1", {
+      ...options,
+      throwOnError: false,
+    });
+    assertEquals(res.success, false);
+    if (res.success) continue;
+    assertMatch(res.error.message, /non-negative safe integer/);
+    assertEquals(res.error.steps, 0);
+  }
+});
+
 Deno.test("evaluateExpression reports parse failures when throwOnParseError=false", () => {
   const res = evaluateExpression("(", {
     throwOnError: false,
