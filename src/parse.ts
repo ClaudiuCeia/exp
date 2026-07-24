@@ -34,7 +34,17 @@ import { createStringSpan } from "./string_literal.ts";
 export type ParseOptions = Readonly<{
   /** When true, throw on parse failure. Default: true */
   throwOnError?: boolean;
+  /** Maximum input length in UTF-16 code units. Default: 100,000. */
+  maxInputLength?: number;
+  /** Maximum recursive syntax nesting. Default: 64. */
+  maxNestingDepth?: number;
+  /** Maximum number of nodes in the parsed AST. Default: 10,000. */
+  maxNodes?: number;
 }>;
+
+const DEFAULT_MAX_INPUT_LENGTH = 100_000;
+const DEFAULT_MAX_NESTING_DEPTH = 64;
+const DEFAULT_MAX_NODES = 10_000;
 
 /**
  * A parse failure.
@@ -395,6 +405,115 @@ const ExpressionLang: ExprLang = createLanguage<ExprLang>({
   File: (s) => map(seq(lx.trivia, s.Expression, eof()), ([, e]) => e),
 });
 
+const parseFailure = (
+  error: ParseError,
+  throwOnError: boolean,
+): ParseResult => {
+  if (throwOnError) throw new ExpParseError(error);
+  return { success: false, error };
+};
+
+const readLimit = (
+  value: number | undefined,
+  fallback: number,
+  name: string,
+): number | ParseError => {
+  const limit = value ?? fallback;
+  if (!Number.isSafeInteger(limit) || limit < 0) {
+    return { message: `${name} must be a non-negative safe integer`, index: 0 };
+  }
+  return limit;
+};
+
+const checkNesting = (
+  input: string,
+  maxNestingDepth: number,
+): ParseError | null => {
+  const frames: Array<{ delimiter: "(" | "[" | null; conditionals: number }> = [
+    { delimiter: null, conditionals: 0 },
+  ];
+  let quote: "'" | '"' | null = null;
+
+  const depth = () => {
+    let conditionals = 0;
+    for (const frame of frames) conditionals += frame.conditionals;
+    return frames.length - 1 + conditionals;
+  };
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+
+    if (quote !== null) {
+      if (ch === "\\") i++;
+      else if (ch === quote) quote = null;
+      continue;
+    }
+
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+
+    if (ch === "(" || ch === "[") {
+      frames.push({ delimiter: ch, conditionals: 0 });
+    } else if (
+      (ch === ")" && frames.at(-1)?.delimiter === "(") ||
+      (ch === "]" && frames.at(-1)?.delimiter === "[")
+    ) {
+      frames.pop();
+    } else if (ch === ",") {
+      frames[frames.length - 1].conditionals = 0;
+    } else if (ch === "?" && input[i + 1] !== "?") {
+      frames[frames.length - 1].conditionals++;
+    } else if (ch === "?" && input[i + 1] === "?") {
+      i++;
+    }
+
+    if (depth() > maxNestingDepth) {
+      return { message: "parse nesting limit exceeded", index: i };
+    }
+  }
+
+  return null;
+};
+
+const checkNodeLimit = (root: Expr, maxNodes: number): ParseError | null => {
+  const pending: Expr[] = [root];
+  let count = 0;
+
+  while (pending.length > 0) {
+    const node = pending.pop()!;
+    count++;
+    if (count > maxNodes) {
+      return { message: "AST node limit exceeded", index: node.span.start };
+    }
+
+    switch (node.kind) {
+      case "array":
+        for (const element of node.elements) pending.push(element);
+        break;
+      case "unary":
+        pending.push(node.expr);
+        break;
+      case "binary":
+        pending.push(node.right, node.left);
+        break;
+      case "member":
+        pending.push(node.object);
+        break;
+      case "call":
+        pending.push(node.callee);
+        for (const arg of node.args) pending.push(arg);
+        break;
+      case "conditional":
+        pending.push(node.alternate, node.consequent, node.test);
+        break;
+    }
+  }
+
+  return null;
+};
+
 /**
  * Parse a single expression into an AST.
  *
@@ -408,15 +527,54 @@ export function parseExpression(
 ): ParseResult {
   const throwOnError = opts.throwOnError ?? true;
 
-  const res = ExpressionLang.File({ text: input, index: 0 });
+  const maxInputLength = readLimit(
+    opts.maxInputLength,
+    DEFAULT_MAX_INPUT_LENGTH,
+    "maxInputLength",
+  );
+  if (typeof maxInputLength !== "number") {
+    return parseFailure(maxInputLength, throwOnError);
+  }
+  const maxNestingDepth = readLimit(
+    opts.maxNestingDepth,
+    DEFAULT_MAX_NESTING_DEPTH,
+    "maxNestingDepth",
+  );
+  if (typeof maxNestingDepth !== "number") {
+    return parseFailure(maxNestingDepth, throwOnError);
+  }
+  const maxNodes = readLimit(opts.maxNodes, DEFAULT_MAX_NODES, "maxNodes");
+  if (typeof maxNodes !== "number") {
+    return parseFailure(maxNodes, throwOnError);
+  }
+
+  if (input.length > maxInputLength) {
+    return parseFailure(
+      { message: "parse input length limit exceeded", index: maxInputLength },
+      throwOnError,
+    );
+  }
+
+  const nestingError = checkNesting(input, maxNestingDepth);
+  if (nestingError) return parseFailure(nestingError, throwOnError);
+
+  let res: ReturnType<typeof ExpressionLang.File>;
+  try {
+    res = ExpressionLang.File({ text: input, index: 0 });
+  } catch (error) {
+    if (!(error instanceof RangeError)) throw error;
+    return parseFailure(
+      { message: "parser recursion limit exceeded", index: 0 },
+      throwOnError,
+    );
+  }
   if (res.success) {
+    const nodeError = checkNodeLimit(res.value, maxNodes);
+    if (nodeError) return parseFailure(nodeError, throwOnError);
     return { success: true, value: res.value };
   }
 
   const message = formatErrorCompact(res);
   const err: ParseError = { message, index: res.ctx.index };
-  if (throwOnError) {
-    throw new ExpParseError(err);
-  }
-  return { success: false, error: err };
+  return parseFailure(err, throwOnError);
 }

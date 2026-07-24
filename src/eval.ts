@@ -481,6 +481,12 @@ export type EvaluateExpressionOptions =
   & Readonly<{
     /** When true, throw on parse failure. Default: true */
     throwOnParseError?: boolean;
+    /** Maximum parser input length in UTF-16 code units. Default: 100,000. */
+    maxInputLength?: number;
+    /** Maximum recursive parser syntax nesting. Default: 64. */
+    maxNestingDepth?: number;
+    /** Maximum number of nodes in the parsed AST. Default: 10,000. */
+    maxNodes?: number;
   }>;
 
 /**
@@ -495,6 +501,9 @@ export function evaluateExpression(
 ): EvalResult {
   const parsed = parseExpression(input, {
     throwOnError: opts.throwOnParseError ?? true,
+    maxInputLength: opts.maxInputLength,
+    maxNestingDepth: opts.maxNestingDepth,
+    maxNodes: opts.maxNodes,
   });
   if (!parsed.success) {
     return {

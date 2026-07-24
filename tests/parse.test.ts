@@ -1,4 +1,4 @@
-import { assertEquals, assertStringIncludes } from "@std/assert";
+import { assertEquals, assertStringIncludes, assertThrows } from "@std/assert";
 import { ExpParseError, parseExpression } from "../src/parse.ts";
 
 Deno.test("parseExpression parses numbers", () => {
@@ -325,4 +325,76 @@ Deno.test("parseExpression reports call missing closing paren", () => {
   if (res.success) return;
 
   assertStringIncludes(res.error.message, "closing ')'");
+});
+
+Deno.test("parseExpression enforces input length limits", () => {
+  const res = parseExpression("12345", {
+    throwOnError: false,
+    maxInputLength: 4,
+  });
+  assertEquals(res.success, false);
+  if (res.success) return;
+  assertStringIncludes(res.error.message, "input length limit");
+  assertEquals(res.error.index, 4);
+});
+
+Deno.test("parseExpression rejects excessive nesting without overflowing", () => {
+  const inputs = [
+    "(".repeat(10_000) + "1" + ")".repeat(10_000),
+    "[".repeat(10_000) + "1" + "]".repeat(10_000),
+    "true ? 1 : ".repeat(2_000) + "0",
+  ];
+
+  for (const input of inputs) {
+    const res = parseExpression(input, {
+      throwOnError: false,
+      maxInputLength: input.length,
+      maxNestingDepth: 64,
+    });
+    assertEquals(res.success, false);
+    if (res.success) continue;
+    assertStringIncludes(res.error.message, "nesting limit");
+  }
+});
+
+Deno.test("parseExpression ignores delimiters inside strings", () => {
+  const res = parseExpression('"(([[???"', {
+    throwOnError: false,
+    maxNestingDepth: 0,
+  });
+  assertEquals(res.success, true);
+});
+
+Deno.test("parseExpression distinguishes nullish operators from conditionals", () => {
+  const res = parseExpression("null ?? undefined", {
+    throwOnError: false,
+    maxNestingDepth: 0,
+  });
+  assertEquals(res.success, true);
+});
+
+Deno.test("parseExpression enforces AST node limits", () => {
+  const res = parseExpression("1 + 2", {
+    throwOnError: false,
+    maxNodes: 2,
+  });
+  assertEquals(res.success, false);
+  if (res.success) return;
+  assertStringIncludes(res.error.message, "AST node limit");
+});
+
+Deno.test("parseExpression validates resource limit options", () => {
+  const res = parseExpression("1", {
+    throwOnError: false,
+    maxNodes: Number.NaN,
+  });
+  assertEquals(res.success, false);
+  if (res.success) return;
+  assertStringIncludes(res.error.message, "non-negative safe integer");
+
+  assertThrows(
+    () => parseExpression("1", { maxNestingDepth: -1 }),
+    ExpParseError,
+    "non-negative safe integer",
+  );
 });

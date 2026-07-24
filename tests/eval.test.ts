@@ -616,6 +616,18 @@ Deno.test("evaluateExpression reports parse failures when throwOnParseError=fals
   assertEquals(res.error.index! >= 0, true);
 });
 
+Deno.test("evaluateExpression forwards parser resource limits", () => {
+  const res = evaluateExpression("1 + 2", {
+    throwOnError: false,
+    throwOnParseError: false,
+    maxNodes: 2,
+  });
+  assertEquals(res.success, false);
+  if (res.success) return;
+  assertMatch(res.error.message, /AST node limit/);
+  assertEquals(res.error.steps, 0);
+});
+
 Deno.test("evaluateAst returns errors for unknown operators (defensive)", () => {
   const badUnary = {
     kind: "unary",
