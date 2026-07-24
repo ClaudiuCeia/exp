@@ -2,6 +2,7 @@ import { buildCommand } from "@stricli/core";
 import { evaluateExpression } from "../src/eval.ts";
 import type { RuntimeValue } from "../src/runtime.ts";
 import { formatDiagnosticReport } from "../src/diagnostics.ts";
+import { ReplLineDecoder } from "./repl_input.ts";
 
 export type Format = "json" | "inspect";
 
@@ -209,9 +210,8 @@ export const replCommand = buildCommand({
 
     help();
 
-    const decoder = new TextDecoder();
+    const input = new ReplLineDecoder();
     const buf = new Uint8Array(1024 * 64);
-    let carry = "";
 
     const prompt = async () => {
       await writeStdout("> ");
@@ -293,23 +293,14 @@ export const replCommand = buildCommand({
       const n = await Deno.stdin.read(buf);
       if (n === null) break;
 
-      carry += decoder.decode(buf.subarray(0, n));
-
-      while (true) {
-        const idx = carry.indexOf("\n");
-        if (idx === -1) break;
-
-        const lineRaw = carry.slice(0, idx);
-        carry = carry.slice(idx + 1);
-
+      for (const lineRaw of input.push(buf.subarray(0, n))) {
         const r = await handleLine(lineRaw, { promptAfter: true });
         if (r === "exit") return;
       }
     }
 
-    // If stdin ended without a trailing newline, process the final buffered line.
-    if (carry.length > 0) {
-      const r = await handleLine(carry, { promptAfter: false });
+    for (const lineRaw of input.finish()) {
+      const r = await handleLine(lineRaw, { promptAfter: false });
       if (r === "exit") return;
     }
   },
