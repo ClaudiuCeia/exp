@@ -1,6 +1,7 @@
 # exp
 
 [![JSR](https://jsr.io/badges/@claudiu-ceia/exp)](https://jsr.io/@claudiu-ceia/exp)
+[![npm](https://img.shields.io/npm/v/@claudiu-ceia/exp?logo=npm)](https://www.npmjs.com/package/@claudiu-ceia/exp)
 [![CI](https://github.com/ClaudiuCeia/exp/actions/workflows/ci.yml/badge.svg)](https://github.com/ClaudiuCeia/exp/actions/workflows/ci.yml)
 
 A small, deterministic expression language: parse into a typed AST with spans,
