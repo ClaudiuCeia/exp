@@ -18,6 +18,12 @@ jobs:
         with:
           deno-version: v2.x
 
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+
       - name: Verify formatting
         run: deno fmt --check
 
@@ -26,3 +32,19 @@ jobs:
 
       - name: Run tests
         run: deno test --ignore=npm
+
+      - name: Build npm package
+        run: deno task build:npm
+
+      - name: Test packed npm package
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="$(npm pack ./npm --pack-destination "${RUNNER_TEMP}" --silent)"
+          consumer="${RUNNER_TEMP}/consumer"
+          npm install --prefix "${consumer}" "${RUNNER_TEMP}/${package}"
+          cd "${consumer}"
+          node --input-type=module -e \
+            'const { evaluateExpression } = await import("@claudiu-ceia/exp"); if (evaluateExpression("1 + 2").value !== 3) process.exit(1)'
+          node -e \
+            'const { evaluateExpression } = require("@claudiu-ceia/exp"); if (evaluateExpression("1 + 2").value !== 3) process.exit(1)'
