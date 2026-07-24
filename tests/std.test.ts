@@ -1,5 +1,7 @@
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertThrows } from "@std/assert";
 import { evaluateExpression } from "../src/eval.ts";
+import type { RuntimeValue } from "../src/runtime.ts";
+import { std } from "../src/std.ts";
 
 Deno.test("std.len works for strings and arrays", () => {
   const a = evaluateExpression("std.len('abc')", { throwOnError: false });
@@ -64,4 +66,15 @@ Deno.test("env cannot override std", () => {
     env: { std: {} },
   });
   assertEquals(res.success, false);
+});
+
+Deno.test("std cannot be mutated by consumers", () => {
+  assertThrows(() => {
+    (std as Record<string, RuntimeValue>).len = () => 999;
+  }, TypeError);
+
+  const res = evaluateExpression("std.len([1])", { throwOnError: false });
+  assertEquals(res.success, true);
+  if (!res.success) return;
+  assertEquals(res.value, 1);
 });

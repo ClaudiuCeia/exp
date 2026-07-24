@@ -15,7 +15,7 @@ const expectString = (v: RuntimeValue, name: string): string => {
  *
  * Deterministic, side-effect-free helpers only.
  */
-export const std: Record<string, RuntimeValue> = Object.assign(
+const stdValues: Record<string, RuntimeValue> = Object.assign(
   Object.create(null),
   {
     // Length helper.
@@ -88,4 +88,8 @@ export const std: Record<string, RuntimeValue> = Object.assign(
       return str.slice(a, b);
     },
   } satisfies Record<string, RuntimeValue>,
+);
+
+export const std: Readonly<Record<string, RuntimeValue>> = Object.freeze(
+  stdValues,
 );
