@@ -34,11 +34,9 @@ await build({
       type: "git",
       url: "git+https://github.com/ClaudiuCeia/exp.git",
     },
-    dependencies: {
-      "@claudiu-ceia/combine": "^0.3.0",
-    },
   },
   postBuild() {
-    // no-op for now
+    Deno.copyFileSync("README.md", "npm/README.md");
+    Deno.copyFileSync("LICENSE", "npm/LICENSE");
   },
 });
