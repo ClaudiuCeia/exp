@@ -450,6 +450,123 @@ Deno.test(
   },
 );
 
+Deno.test("evaluateExpression preserves shared environment references", () => {
+  const shared = { value: 1 };
+  const direct = evaluateExpression("a == b", {
+    throwOnError: false,
+    env: { a: shared, b: shared },
+  });
+  assertEquals(direct.success, true);
+  if (!direct.success) return;
+  assertEquals(direct.value, true);
+
+  const nested = evaluateExpression("std.includes(items, item)", {
+    throwOnError: false,
+    env: { item: shared, items: [shared] },
+  });
+  assertEquals(nested.success, true);
+  if (!nested.success) return;
+  assertEquals(nested.value, true);
+});
+
+Deno.test("evaluateExpression safely normalizes cyclic environments", () => {
+  const node: Record<string, RuntimeValue> = {};
+  node.self = node;
+  const objectResult = evaluateExpression("node.self == node", {
+    throwOnError: false,
+    env: { node },
+  });
+  assertEquals(objectResult.success, true);
+  if (!objectResult.success) return;
+  assertEquals(objectResult.value, true);
+
+  const xs: RuntimeValue[] = [];
+  xs.push(xs);
+  const arrayResult = evaluateExpression("std.includes(xs, xs)", {
+    throwOnError: false,
+    env: { xs },
+  });
+  assertEquals(arrayResult.success, true);
+  if (!arrayResult.success) return;
+  assertEquals(arrayResult.value, true);
+});
+
+Deno.test("evaluateExpression rejects accessors in cyclic environments", () => {
+  let called = 0;
+  const node: Record<string, unknown> = {};
+  node.self = node;
+  Object.defineProperty(node, "value", {
+    enumerable: true,
+    get() {
+      called++;
+      return 1;
+    },
+  });
+
+  const res = evaluateExpression("node.self", {
+    throwOnError: false,
+    env: { node } as unknown as Record<string, RuntimeValue>,
+  });
+  assertEquals(res.success, false);
+  assertEquals(called, 0);
+  if (res.success) return;
+  assertMatch(res.error.message, /data property/);
+});
+
+Deno.test("evaluateExpression bounds runtime value normalization", () => {
+  const nested = { child: { child: { value: 1 } } };
+  const depthResult = evaluateExpression("nested.child", {
+    throwOnError: false,
+    env: { nested },
+    maxRuntimeDepth: 1,
+  });
+  assertEquals(depthResult.success, false);
+  if (depthResult.success) return;
+  assertMatch(depthResult.error.message, /runtime depth limit/);
+
+  const entriesResult = evaluateExpression("xs", {
+    throwOnError: false,
+    env: { xs: new Array(100) },
+    maxRuntimeEntries: 10,
+  });
+  assertEquals(entriesResult.success, false);
+  if (entriesResult.success) return;
+  assertMatch(entriesResult.error.message, /runtime entry limit/);
+});
+
+Deno.test("evaluateExpression revalidates values after host mutation", () => {
+  const res = evaluateExpression("mutate(obj) + obj.secret", {
+    throwOnError: false,
+    env: {
+      obj: {},
+      mutate: (value: RuntimeValue) => {
+        if (typeof value === "object" && value !== null) {
+          Object.defineProperty(value, "secret", {
+            value: new Date(),
+            enumerable: true,
+          });
+        }
+        return 0;
+      },
+    },
+  });
+  assertEquals(res.success, false);
+  if (res.success) return;
+  assertMatch(res.error.message, /not a supported runtime value/);
+});
+
+Deno.test("evaluateExpression validates cyclic function return values", () => {
+  const value: Record<string, RuntimeValue> = {};
+  value.self = value;
+  const res = evaluateExpression("f().self == f().self", {
+    throwOnError: false,
+    env: { f: () => value },
+  });
+  assertEquals(res.success, true);
+  if (!res.success) return;
+  assertEquals(res.value, true);
+});
+
 Deno.test("evaluateExpression allows structured return values", () => {
   const res = evaluateExpression("f().a + f().b.length", {
     throwOnError: false,

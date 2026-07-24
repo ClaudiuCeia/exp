@@ -32,6 +32,10 @@ export type EvalOptions = Readonly<{
   maxDepth?: number;
   /** Max elements allowed in an array literal. Default: 1_000 */
   maxArrayElements?: number;
+  /** Max nesting in environment and function-return values. Default: 64 */
+  maxRuntimeDepth?: number;
+  /** Max entries in environment and function-return values. Default: 10_000 */
+  maxRuntimeEntries?: number;
 
   /**
    * Behavior when an identifier is not present on `env`.
@@ -94,6 +98,8 @@ type Ctx = {
   depth: number;
   maxDepth: number;
   maxArrayElements: number;
+  maxRuntimeDepth: number;
+  maxRuntimeEntries: number;
   unknownIdentifier: "error" | "undefined";
 };
 
@@ -176,7 +182,7 @@ const bump = (ctx: Ctx, span?: Span): EvalResult | null => {
   return null;
 };
 
-const getMember = (obj: RuntimeValue, prop: string): RuntimeValue => {
+const getMember = (obj: RuntimeValue, prop: string, ctx: Ctx): RuntimeValue => {
   if (FORBIDDEN_MEMBERS.has(prop)) {
     throw new Error("forbidden member access");
   }
@@ -192,7 +198,15 @@ const getMember = (obj: RuntimeValue, prop: string): RuntimeValue => {
     if (!("value" in descriptor)) {
       throw new Error("member must be an enumerable data property");
     }
-    return descriptor.value as RuntimeValue;
+    if (
+      !isRuntimeValue(descriptor.value, {
+        maxDepth: ctx.maxRuntimeDepth,
+        maxEntries: ctx.maxRuntimeEntries,
+      })
+    ) {
+      throw new Error("member is not a supported runtime value");
+    }
+    return descriptor.value;
   }
 
   return undefined;
@@ -323,7 +337,7 @@ const evalBinaryExpr = (expr: BinaryExpr, ctx: Ctx): EvalResult => {
 const evalMemberExpr = (expr: MemberExpr, ctx: Ctx): EvalResult => {
   const obj = evalExpr(expr.object, ctx);
   if (!obj.success) return obj;
-  const value = getMember(obj.value, expr.property);
+  const value = getMember(obj.value, expr.property, ctx);
   return { success: true, value };
 };
 
@@ -335,7 +349,7 @@ const evalCallExpr = (expr: CallExpr, ctx: Ctx): EvalResult => {
     const obj = evalExpr(expr.callee.object, ctx);
     if (!obj.success) return obj;
     receiver = obj.value;
-    fn = getMember(obj.value, expr.callee.property);
+    fn = getMember(obj.value, expr.callee.property, ctx);
   } else {
     const callee = evalExpr(expr.callee, ctx);
     if (!callee.success) return callee;
@@ -358,7 +372,12 @@ const evalCallExpr = (expr: CallExpr, ctx: Ctx): EvalResult => {
   }
 
   const out = receiver === undefined ? fn(...args) : fn.apply(receiver, args);
-  if (!isRuntimeValue(out)) {
+  if (
+    !isRuntimeValue(out, {
+      maxDepth: ctx.maxRuntimeDepth,
+      maxEntries: ctx.maxRuntimeEntries,
+    })
+  ) {
     return evalError(
       "function returned an unsupported value",
       expr.span,
@@ -426,8 +445,13 @@ const evalExpr = (expr: Expr, ctx: Ctx): EvalResult => {
 /** Evaluate a pre-parsed AST. */
 export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
   const throwOnError = opts.throwOnError ?? true;
+  const maxRuntimeDepth = opts.maxRuntimeDepth ?? 64;
+  const maxRuntimeEntries = opts.maxRuntimeEntries ?? 10_000;
 
-  const envRes = normalizeEnv(opts.env as unknown);
+  const envRes = normalizeEnv(opts.env as unknown, {
+    maxDepth: maxRuntimeDepth,
+    maxEntries: maxRuntimeEntries,
+  });
   if (!envRes.ok) {
     const e: EvalError = { message: envRes.message, steps: 0 };
     if (throwOnError) throw new ExpEvalError(e);
@@ -466,6 +490,8 @@ export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
     depth: 0,
     maxDepth: opts.maxDepth ?? 256,
     maxArrayElements: opts.maxArrayElements ?? 1_000,
+    maxRuntimeDepth,
+    maxRuntimeEntries,
     unknownIdentifier: opts.unknownIdentifier ?? "error",
   };
 
