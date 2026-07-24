@@ -39,7 +39,7 @@ Design goals:
 - **Typed AST + spans** — nodes carry `{ start, end }` indices for diagnostics.
 - **Safe-by-default access** — expressions only touch data/functions you place
   in `env`.
-- **Budgeted evaluation** — max steps, recursion depth, and array literal size.
+- **Resource budgets** — bounded parsing, evaluation, and runtime value graphs.
 
 ## Quickstart
 
@@ -223,11 +223,21 @@ properties.
 
 ### Resource budgets
 
-Evaluation supports a few defensive limits (all optional):
+Parsing supports these defensive limits (all optional):
+
+- `maxInputLength` (default `100_000`): max UTF-16 code units
+- `maxNestingDepth` (default `64`): max recursive syntax nesting
+- `maxNodes` (default `10_000`): max AST nodes
+
+Evaluation supports these defensive limits (all optional):
 
 - `maxSteps` (default `10_000`): max AST nodes visited
 - `maxDepth` (default `256`): max recursion depth while evaluating
 - `maxArrayElements` (default `1_000`): max elements in an array literal
+- `maxRuntimeDepth` (default `64`): max nesting in environment and function
+  return values
+- `maxRuntimeEntries` (default `10_000`): max entries in environment and
+  function return values
 
 #### Example: filter over an input object
 
@@ -328,6 +338,9 @@ Parse a single expression into a typed AST.
 #### `ParseOptions`
 
 - `throwOnError?: boolean` — default `true`
+- `maxInputLength?: number` — default `100_000`
+- `maxNestingDepth?: number` — default `64`
+- `maxNodes?: number` — default `10_000`
 
 #### `ParseResult`
 
@@ -352,6 +365,9 @@ Parse + evaluate in one step.
 Includes all `EvalOptions` plus:
 
 - `throwOnParseError?: boolean` — default `true`
+- `maxInputLength?: number` — default `100_000`
+- `maxNestingDepth?: number` — default `64`
+- `maxNodes?: number` — default `10_000`
 
 Parse errors:
 
@@ -379,6 +395,8 @@ Evaluate a pre-parsed AST.
 - `maxSteps?: number` — default `10_000`
 - `maxDepth?: number` — default `256`
 - `maxArrayElements?: number` — default `1_000`
+- `maxRuntimeDepth?: number` — default `64`
+- `maxRuntimeEntries?: number` — default `10_000`
 - `throwOnError?: boolean` — default `true`
 
 #### `EvalResult`
