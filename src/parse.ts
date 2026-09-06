@@ -182,6 +182,12 @@ class AstNodeBudget {
     if (this.#remaining === 0) throw new AstNodeBudgetExceeded(index);
     this.#remaining--;
   }
+
+  setRemaining(maxNodes: number): number {
+    const previous = this.#remaining;
+    this.#remaining = maxNodes;
+    return previous;
+  }
 }
 
 const createExpressionLanguage = (budget: AstNodeBudget) =>
@@ -465,6 +471,9 @@ const createExpressionLanguage = (budget: AstNodeBudget) =>
     File: (s) => map(seq(lx.trivia, s.Expression, eof()), ([, e]) => e),
   });
 
+const astNodeBudget = new AstNodeBudget(0);
+const ExpressionLang = createExpressionLanguage(astNodeBudget);
+
 const parseFailure = (
   error: ParseError,
   throwOnError: boolean,
@@ -613,10 +622,10 @@ export function parseExpression(
   const nestingError = checkNesting(input, maxNestingDepth);
   if (nestingError) return parseFailure(nestingError, throwOnError);
 
-  const language = createExpressionLanguage(new AstNodeBudget(maxNodes));
-  let res: ReturnType<typeof language.File>;
+  const previousRemainingAstNodes = astNodeBudget.setRemaining(maxNodes);
+  let res: ReturnType<typeof ExpressionLang.File>;
   try {
-    res = language.File({ text: input, index: 0 });
+    res = ExpressionLang.File({ text: input, index: 0 });
   } catch (error) {
     if (error instanceof AstNodeBudgetExceeded) {
       return parseFailure(
@@ -629,6 +638,8 @@ export function parseExpression(
       { message: "parser recursion limit exceeded", index: 0 },
       throwOnError,
     );
+  } finally {
+    astNodeBudget.setRemaining(previousRemainingAstNodes);
   }
   if (res.success) {
     return { success: true, value: res.value };
