@@ -2,7 +2,39 @@ import { test } from "bun:test";
 import { assertEquals, assertMatch, assertThrows } from "./assert.ts";
 import type { Expr } from "../src/ast/mod.ts";
 import { evaluateAst, evaluateExpression, ExpEvalError } from "../src/eval.ts";
-import type { RuntimeValue } from "../src/runtime.ts";
+import { isPlainObject, type RuntimeValue } from "../src/runtime.ts";
+
+const countPropertyDescriptorTraversals = <T>(
+  run: () => T,
+): Readonly<{ result: T; descriptorReads: number }> => {
+  const originalDescriptor = Object.getOwnPropertyDescriptor(
+    Object,
+    "getOwnPropertyDescriptors",
+  );
+  if (originalDescriptor === undefined) {
+    throw new Error("missing Object.getOwnPropertyDescriptors");
+  }
+  const getOwnPropertyDescriptors = Object.getOwnPropertyDescriptors;
+  let descriptorReads = 0;
+
+  try {
+    Object.defineProperty(Object, "getOwnPropertyDescriptors", {
+      ...originalDescriptor,
+      value: <U>(value: U) => {
+        descriptorReads++;
+        return getOwnPropertyDescriptors(value);
+      },
+    });
+    const result = run();
+    return { result, descriptorReads };
+  } finally {
+    Object.defineProperty(
+      Object,
+      "getOwnPropertyDescriptors",
+      originalDescriptor,
+    );
+  }
+};
 
 test("evaluateExpression evaluates arithmetic", () => {
   const res = evaluateExpression("1 + 2 * 3", { throwOnError: false });
@@ -164,6 +196,54 @@ test("evaluateExpression resolves identifiers + member access", () => {
   assertEquals(res.value, "free");
 });
 
+test("evaluateExpression does not revalidate repeated normalized member chains", () => {
+  const { result, descriptorReads } = countPropertyDescriptorTraversals(() =>
+    evaluateExpression("root.subgraph.value + root.subgraph.value", {
+      env: { root: { subgraph: { value: 21 } } },
+      throwOnError: false,
+    }),
+  );
+
+  assertEquals(descriptorReads, 3);
+  assertEquals(result.success, true);
+  if (!result.success) return;
+  assertEquals(result.value, 42);
+});
+
+test("evaluateExpression does not recache normalized members after standard library calls", () => {
+  const { result, descriptorReads } = countPropertyDescriptorTraversals(() =>
+    evaluateExpression(
+      "std.abs(0) + root.subgraph.value + root.subgraph.value",
+      {
+        env: { root: { subgraph: { value: 21 } } },
+        throwOnError: false,
+      },
+    ),
+  );
+
+  assertEquals(descriptorReads, 5);
+  assertEquals(result, { success: true, value: 42 });
+});
+
+test("evaluateExpression creates a fresh normalized member cache for every call", () => {
+  const options = {
+    env: { root: { subgraph: { value: 21 } } },
+    throwOnError: false,
+  } as const;
+  const { result, descriptorReads } = countPropertyDescriptorTraversals(
+    () =>
+      [
+        evaluateExpression("root.subgraph.value", options),
+        evaluateExpression("root.subgraph.value", options),
+      ] as const,
+  );
+  const [first, second] = result;
+
+  assertEquals(descriptorReads, 6);
+  assertEquals(first, { success: true, value: 21 });
+  assertEquals(second, { success: true, value: 21 });
+});
+
 test("evaluateExpression member access works on arrays (length only)", () => {
   const res1 = evaluateExpression("xs.length", {
     throwOnError: false,
@@ -180,6 +260,15 @@ test("evaluateExpression member access works on arrays (length only)", () => {
   assertEquals(res2.success, true);
   if (!res2.success) return;
   assertEquals(res2.value, undefined);
+});
+
+test("evaluateExpression keeps runtime entry limits scoped away from array literals", () => {
+  const res = evaluateExpression("[1].length", {
+    maxRuntimeEntries: 0,
+    throwOnError: false,
+  });
+
+  assertEquals(res, { success: true, value: 1 });
 });
 
 test("evaluateExpression member access works on proto-null objects", () => {
@@ -712,7 +801,70 @@ test("evaluateExpression revalidates values after host mutation", () => {
   });
   assertEquals(res.success, false);
   if (res.success) return;
-  assertMatch(res.error.message, /not a supported runtime value/);
+  assertEquals(res.error.message, "member is not a supported runtime value");
+});
+
+test("evaluateExpression clears cached values before proxy validation", () => {
+  const res = evaluateExpression(
+    "install(root) == 0 && root.safe.value == 1 && root.proxy.value == 0 && root.safe.value",
+    {
+      env: {
+        root: { safe: { value: 1 } },
+        install: (value: RuntimeValue) => {
+          if (!isPlainObject(value) || !isPlainObject(value.safe)) return -1;
+          const safe = value.safe;
+          const target = Object.assign(
+            Object.create(null) as Record<string, RuntimeValue>,
+            { value: 0 },
+          );
+          value.proxy = new Proxy(target, {
+            getOwnPropertyDescriptor(object, property) {
+              if (property === "value") {
+                safe.value = new Date() as unknown as RuntimeValue;
+              }
+              return Reflect.getOwnPropertyDescriptor(object, property);
+            },
+          });
+          return 0;
+        },
+      },
+      throwOnError: false,
+    },
+  );
+
+  assertEquals(res.success, false);
+  if (res.success) return;
+  assertEquals(res.error.message, "member is not a supported runtime value");
+});
+
+test("evaluateExpression does not cache containers mutated during validation", () => {
+  const res = evaluateExpression("install(root) == 0 && root.safe.value", {
+    env: {
+      root: { safe: { value: 1 } },
+      install: (value: RuntimeValue) => {
+        if (!isPlainObject(value) || !isPlainObject(value.safe)) return -1;
+        const safe = value.safe;
+        const target = Object.assign(
+          Object.create(null) as Record<string, RuntimeValue>,
+          { value: 0 },
+        );
+        safe.proxy = new Proxy(target, {
+          getOwnPropertyDescriptor(object, property) {
+            if (property === "value") {
+              safe.value = new Date() as unknown as RuntimeValue;
+            }
+            return Reflect.getOwnPropertyDescriptor(object, property);
+          },
+        });
+        return 0;
+      },
+    },
+    throwOnError: false,
+  });
+
+  assertEquals(res.success, false);
+  if (res.success) return;
+  assertEquals(res.error.message, "member is not a supported runtime value");
 });
 
 test("evaluateExpression validates cyclic function return values", () => {
@@ -737,6 +889,272 @@ test("evaluateExpression allows structured return values", () => {
   assertEquals(res.success, true);
   if (!res.success) return;
   assertEquals(res.value, 42);
+});
+
+test("evaluateExpression does not cache validated function return values", () => {
+  const target = Object.assign(
+    Object.create(null) as Record<string, RuntimeValue>,
+    { value: 1 },
+  );
+  let descriptorReads = 0;
+  const returned = new Proxy(target, {
+    getOwnPropertyDescriptor(value, property) {
+      if (property === "value") {
+        descriptorReads++;
+        return {
+          configurable: true,
+          enumerable: true,
+          value: descriptorReads === 1 ? 1 : new Date(),
+          writable: true,
+        };
+      }
+      return Reflect.getOwnPropertyDescriptor(value, property);
+    },
+  });
+
+  const res = evaluateExpression("make().value", {
+    env: { make: () => returned },
+    throwOnError: false,
+  });
+
+  assertEquals(descriptorReads, 2);
+  assertEquals(res.success, false);
+  if (res.success) return;
+  assertEquals(res.error.message, "member is not a supported runtime value");
+});
+
+test("evaluateExpression uses captured WeakSet methods for returned member validation", () => {
+  const hasDescriptor = Object.getOwnPropertyDescriptor(
+    WeakSet.prototype,
+    "has",
+  );
+  if (hasDescriptor === undefined) {
+    throw new Error("missing WeakSet.prototype.has");
+  }
+  const target = Object.assign(
+    Object.create(null) as Record<string, RuntimeValue>,
+    { value: 1 },
+  );
+  let descriptorReads = 0;
+  const returned = new Proxy(target, {
+    getOwnPropertyDescriptor(value, property) {
+      if (property === "value") {
+        descriptorReads++;
+        if (descriptorReads === 1) {
+          Object.defineProperty(WeakSet.prototype, "has", {
+            ...hasDescriptor,
+            value: () => true,
+          });
+        }
+        return {
+          configurable: true,
+          enumerable: true,
+          value: descriptorReads === 1 ? 1 : 1n,
+          writable: true,
+        };
+      }
+      return Reflect.getOwnPropertyDescriptor(value, property);
+    },
+  });
+  let result: ReturnType<typeof evaluateExpression> | undefined;
+
+  try {
+    result = evaluateExpression("make().value", {
+      env: { make: () => returned },
+      throwOnError: false,
+    });
+  } finally {
+    Object.defineProperty(WeakSet.prototype, "has", hasDescriptor);
+  }
+
+  assertEquals(descriptorReads, 2);
+  if (result === undefined) throw new Error("evaluation did not return");
+  assertEquals(result.success, false);
+  if (result.success) return;
+  assertEquals(result.error.message, "member is not a supported runtime value");
+});
+
+test("evaluateExpression uses the captured array length validator", () => {
+  const safeIntegerDescriptor = Object.getOwnPropertyDescriptor(
+    Number,
+    "isSafeInteger",
+  );
+  if (safeIntegerDescriptor === undefined) {
+    throw new Error("missing Number.isSafeInteger");
+  }
+  let descriptorReads = 0;
+  const returned = new Proxy([1], {
+    getOwnPropertyDescriptor(value, property) {
+      const descriptor = Reflect.getOwnPropertyDescriptor(value, property);
+      if (property !== "length" || descriptor === undefined) return descriptor;
+      descriptorReads++;
+      if (descriptorReads === 2) {
+        Object.defineProperty(Number, "isSafeInteger", {
+          ...safeIntegerDescriptor,
+          value: () => true,
+        });
+      }
+      return descriptorReads === 3 ? { ...descriptor, value: 1.5 } : descriptor;
+    },
+  });
+  let result: ReturnType<typeof evaluateExpression> | undefined;
+
+  try {
+    result = evaluateExpression("make().length", {
+      env: { make: () => returned },
+      throwOnError: false,
+    });
+  } finally {
+    Object.defineProperty(Number, "isSafeInteger", safeIntegerDescriptor);
+  }
+
+  assertEquals(descriptorReads, 3);
+  if (result === undefined) throw new Error("evaluation did not return");
+  assertEquals(result.success, false);
+  if (result.success) return;
+  assertEquals(result.error.message, "member is not a supported runtime value");
+});
+
+test("evaluateExpression reads returned array length without invoking proxy get traps", () => {
+  let getCalls = 0;
+  const returned = new Proxy([1], {
+    get(value, property, receiver) {
+      if (property === "length") {
+        getCalls++;
+        return new Date();
+      }
+      return Reflect.get(value, property, receiver);
+    },
+  });
+
+  const res = evaluateExpression("make().length", {
+    env: { make: () => returned },
+    throwOnError: false,
+  });
+
+  assertEquals(getCalls, 0);
+  assertEquals(res, { success: true, value: 1 });
+});
+
+test("evaluateExpression rejects returned array proxies revoked after validation", () => {
+  let descriptorReads = 0;
+  const { proxy, revoke } = Proxy.revocable([1], {
+    getOwnPropertyDescriptor(value, property) {
+      descriptorReads++;
+      const descriptor = Reflect.getOwnPropertyDescriptor(value, property);
+      if (property === "0") revoke();
+      return descriptor;
+    },
+  });
+
+  const res = evaluateExpression("make().length", {
+    env: { make: () => proxy },
+    throwOnError: false,
+  });
+
+  assertEquals(descriptorReads, 2);
+  assertEquals(res.success, false);
+  if (res.success) return;
+  assertEquals(res.error.message, "member is not a supported runtime value");
+});
+
+test("evaluateExpression rejects returned array proxies that throw on revalidation", () => {
+  let lengthDescriptorReads = 0;
+  const returned = new Proxy([1], {
+    getOwnPropertyDescriptor(value, property) {
+      if (property === "length") {
+        lengthDescriptorReads++;
+        if (lengthDescriptorReads === 2) {
+          throw new Error("length descriptor failed");
+        }
+      }
+      return Reflect.getOwnPropertyDescriptor(value, property);
+    },
+  });
+
+  const res = evaluateExpression("make().length", {
+    env: { make: () => returned },
+    throwOnError: false,
+  });
+
+  assertEquals(lengthDescriptorReads, 2);
+  assertEquals(res.success, false);
+  if (res.success) return;
+  assertEquals(res.error.message, "member is not a supported runtime value");
+});
+
+test("evaluateExpression rejects malformed returned array length descriptors", () => {
+  const invalidLengths: readonly unknown[] = [
+    "1",
+    -1,
+    1.5,
+    Number.NaN,
+    Number.MAX_SAFE_INTEGER + 1,
+    4,
+  ];
+
+  for (const invalidLength of invalidLengths) {
+    let descriptorReads = 0;
+    let getCalls = 0;
+    const returned = new Proxy([1], {
+      get(value, property, receiver) {
+        if (property === "length") getCalls++;
+        return Reflect.get(value, property, receiver);
+      },
+      getOwnPropertyDescriptor(value, property) {
+        const descriptor = Reflect.getOwnPropertyDescriptor(value, property);
+        if (property !== "length" || descriptor === undefined) {
+          return descriptor;
+        }
+        descriptorReads++;
+        return descriptorReads === 3
+          ? { ...descriptor, value: invalidLength }
+          : descriptor;
+      },
+    });
+
+    const res = evaluateExpression("make().length", {
+      env: { make: () => returned },
+      maxRuntimeEntries: 3,
+      throwOnError: false,
+    });
+
+    assertEquals(descriptorReads, 3);
+    assertEquals(getCalls, 0);
+    assertEquals(res.success, false);
+    if (res.success) continue;
+    assertEquals(res.error.message, "member is not a supported runtime value");
+  }
+});
+
+test("evaluateExpression rejects arrays enlarged by host code before reading entries", () => {
+  let getterCalls = 0;
+  const res = evaluateExpression("enlarge(xs) + xs.length", {
+    env: {
+      xs: [1],
+      enlarge: (value: RuntimeValue) => {
+        if (Array.isArray(value)) {
+          value.length = 4;
+          Object.defineProperty(value, "0", {
+            configurable: true,
+            enumerable: true,
+            get() {
+              getterCalls++;
+              return new Date();
+            },
+          });
+        }
+        return 0;
+      },
+    },
+    maxRuntimeEntries: 3,
+    throwOnError: false,
+  });
+
+  assertEquals(getterCalls, 0);
+  assertEquals(res.success, false);
+  if (res.success) return;
+  assertEquals(res.error.message, "member is not a supported runtime value");
 });
 
 test("evaluateExpression supports pipeline operator", () => {

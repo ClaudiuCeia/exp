@@ -12,6 +12,22 @@ import {
 
 import { std } from "./std.ts";
 
+const WeakSetConstructor = WeakSet;
+const weakSetHas = WeakSet.prototype.has;
+const weakSetAdd = WeakSet.prototype.add;
+const reflectApply = Reflect.apply;
+const numberIsSafeInteger = Number.isSafeInteger;
+
+const createContainerSet = (): WeakSet<object> =>
+  new WeakSetConstructor<object>();
+
+const containerSetHas = (set: WeakSet<object>, container: object): boolean =>
+  reflectApply(weakSetHas, set, [container]);
+
+const containerSetAdd = (set: WeakSet<object>, container: object): void => {
+  reflectApply(weakSetAdd, set, [container]);
+};
+
 /** Options for `evaluateAst` and `evaluateExpression`. */
 export type EvalOptions = Readonly<{
   /**
@@ -101,6 +117,7 @@ export type EvalResult =
 
 type Ctx = {
   env: Record<string, RuntimeValue>;
+  currentContainers: WeakSet<object>;
   steps: number;
   maxSteps: number;
   depth: number;
@@ -115,6 +132,15 @@ type Ctx = {
 const FORBIDDEN_MEMBERS = new Set(["__proto__", "prototype", "constructor"]);
 const DEFAULT_MAX_ARRAY_ELEMENTS = 1_000;
 const DEFAULT_MAX_CALL_ARGUMENTS = DEFAULT_MAX_ARRAY_ELEMENTS;
+const UNSUPPORTED_MEMBER_ERROR = "member is not a supported runtime value";
+
+const isRuntimeArray = (value: RuntimeValue): value is RuntimeValue[] => {
+  try {
+    return Array.isArray(value);
+  } catch {
+    throw new Error(UNSUPPORTED_MEMBER_ERROR);
+  }
+};
 
 const isTruthy = (v: RuntimeValue): boolean => {
   return !!v;
@@ -205,9 +231,45 @@ const getMember = (obj: RuntimeValue, prop: string, ctx: Ctx): RuntimeValue => {
     throw new Error("forbidden member access");
   }
 
-  if (Array.isArray(obj)) {
-    if (prop === "length") return obj.length;
-    return undefined;
+  const ownerIsContainer = obj !== null && typeof obj === "object";
+  const ownerWasCurrent =
+    ownerIsContainer && containerSetHas(ctx.currentContainers, obj);
+  if (ownerIsContainer && !ownerWasCurrent) {
+    ctx.currentContainers = createContainerSet();
+  }
+
+  if (isRuntimeArray(obj)) {
+    if (prop !== "length") return undefined;
+    if (!ownerWasCurrent) {
+      if (
+        !isRuntimeValue(obj, {
+          maxDepth: ctx.maxRuntimeDepth,
+          maxEntries: ctx.maxRuntimeEntries,
+        })
+      ) {
+        throw new Error(UNSUPPORTED_MEMBER_ERROR);
+      }
+    }
+
+    let descriptor: PropertyDescriptor | undefined;
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(obj, "length");
+    } catch {
+      throw new Error(UNSUPPORTED_MEMBER_ERROR);
+    }
+    if (descriptor === undefined || !("value" in descriptor)) {
+      throw new Error(UNSUPPORTED_MEMBER_ERROR);
+    }
+    const length: unknown = descriptor.value;
+    if (
+      typeof length !== "number" ||
+      !numberIsSafeInteger(length) ||
+      length < 0 ||
+      (!ownerWasCurrent && length > ctx.maxRuntimeEntries)
+    ) {
+      throw new Error(UNSUPPORTED_MEMBER_ERROR);
+    }
+    return length;
   }
 
   if (isPlainObject(obj)) {
@@ -216,15 +278,21 @@ const getMember = (obj: RuntimeValue, prop: string, ctx: Ctx): RuntimeValue => {
     if (!("value" in descriptor)) {
       throw new Error("member must be an enumerable data property");
     }
-    if (
-      !isRuntimeValue(descriptor.value, {
-        maxDepth: ctx.maxRuntimeDepth,
-        maxEntries: ctx.maxRuntimeEntries,
-      })
-    ) {
-      throw new Error("member is not a supported runtime value");
+    const value: unknown = descriptor.value;
+    const isContainer = value !== null && typeof value === "object";
+    if (ownerWasCurrent) {
+      if (isContainer) containerSetAdd(ctx.currentContainers, value);
+    } else {
+      if (
+        !isRuntimeValue(value, {
+          maxDepth: ctx.maxRuntimeDepth,
+          maxEntries: ctx.maxRuntimeEntries,
+        })
+      ) {
+        throw new Error(UNSUPPORTED_MEMBER_ERROR);
+      }
     }
-    return descriptor.value;
+    return value as RuntimeValue;
   }
 
   return undefined;
@@ -261,6 +329,7 @@ const evalArrayExpr = (expr: ArrayExpr, ctx: Ctx): EvalResult => {
     if (!r.success) return r;
     out.push(r.value);
   }
+  containerSetAdd(ctx.currentContainers, out);
   return { success: true, value: out };
 };
 
@@ -386,6 +455,7 @@ const evalCallExpr = (expr: CallExpr, ctx: Ctx): EvalResult => {
     args.push(ar.value);
   }
 
+  ctx.currentContainers = createContainerSet();
   const out = receiver === undefined ? fn(...args) : fn.apply(receiver, args);
   if (
     !isRuntimeValue(out, {
@@ -832,6 +902,7 @@ export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
     return { success: false, error };
   }
 
+  const currentContainers = createContainerSet();
   const envRes = normalizeEnv(opts.env as unknown, {
     maxDepth: maxRuntimeDepth,
     maxEntries: maxRuntimeEntries,
@@ -858,6 +929,7 @@ export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
         writable: true,
         configurable: true,
       });
+      containerSetAdd(currentContainers, std);
       for (const [k, v] of Object.entries(envRes.env)) {
         Object.defineProperty(env, k, {
           value: v,
@@ -865,10 +937,14 @@ export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
           writable: true,
           configurable: true,
         });
+        if (v !== null && typeof v === "object") {
+          containerSetAdd(currentContainers, v);
+        }
       }
 
       const ctx: Ctx = {
         env,
+        currentContainers,
         steps: 0,
         maxSteps,
         depth: 0,
