@@ -40,215 +40,383 @@ export type RuntimeValueLimits = Readonly<{
   maxEntries: number;
 }>;
 
-type ValidationResult =
-  | Readonly<{ ok: true }>
-  | Readonly<{ ok: false; message: string }>;
+type TraversalOk = Readonly<{ ok: true; value: RuntimeValue }>;
+type TraversalErr = Readonly<{ ok: false; message: string }>;
+type TraversalResult = TraversalOk | TraversalErr;
 
-type NormalizeOk = Readonly<{ ok: true; value: RuntimeValue }>;
-type NormalizeErr = Readonly<{ ok: false; message: string }>;
-type NormalizeResult = NormalizeOk | NormalizeErr;
-
-const isAccessorDescriptor = (
-  d: PropertyDescriptor,
-): d is PropertyDescriptor & { get?: unknown; set?: unknown } => {
-  return typeof d.get === "function" || typeof d.set === "function";
-};
-
-type TraversalState = {
+type TraversalBaseState = {
   entries: number;
-  limits: RuntimeValueLimits;
+  readonly limits: RuntimeValueLimits;
 };
+
+type TraversalState = TraversalBaseState &
+  (
+    | Readonly<{ mode: "validate"; seen: WeakSet<object> }>
+    | Readonly<{
+        mode: "normalize";
+        seen: WeakMap<object, RuntimeValue>;
+      }>
+  );
+
+type RuntimePath =
+  | Readonly<{ kind: "root"; value: string }>
+  | Readonly<{ kind: "child"; parent: RuntimePath; segment: string }>;
+
+type NormalizeTarget =
+  | Readonly<{ kind: "array"; value: RuntimeArray; index: number }>
+  | Readonly<{ kind: "object"; value: RuntimeObject; key: string }>;
+
+type ArrayFrameBase = Readonly<{
+  kind: "array";
+  value: RuntimeArray;
+  path: RuntimePath;
+  depth: number;
+  length: number;
+  previous: TraversalFrame | undefined;
+}> & {
+  index: number;
+};
+
+type ArrayFrame = ArrayFrameBase &
+  (
+    | Readonly<{ mode: "validate" }>
+    | Readonly<{
+        mode: "normalize";
+        output: RuntimeArray;
+        target: NormalizeTarget | undefined;
+      }>
+  );
+
+type ObjectFrameBase = Readonly<{
+  kind: "object";
+  entries: ReadonlyArray<readonly [string, PropertyDescriptor]>;
+  path: RuntimePath;
+  depth: number;
+  previous: TraversalFrame | undefined;
+}> & {
+  index: number;
+};
+
+type ObjectFrame = ObjectFrameBase &
+  (
+    | Readonly<{ mode: "validate" }>
+    | Readonly<{
+        mode: "normalize";
+        output: RuntimeObject;
+        target: NormalizeTarget | undefined;
+      }>
+  );
+
+type TraversalFrame = ArrayFrame | ObjectFrame;
+
+type EntryResult = Readonly<{ ok: true }> | TraversalErr;
+
+const formatRuntimePath = (path: RuntimePath): string => {
+  let formatted = "";
+  let current = path;
+  while (current.kind === "child") {
+    formatted = current.segment + formatted;
+    current = current.parent;
+  }
+  return current.value + formatted;
+};
+
+const traversalError = (path: RuntimePath, message: string): TraversalErr => ({
+  ok: false,
+  message: `${formatRuntimePath(path)} ${message}`,
+});
 
 const consumeEntries = (
   state: TraversalState,
   count: number,
-  path: string,
-): ValidationResult => {
+  path: RuntimePath,
+): EntryResult => {
   if (count > state.limits.maxEntries - state.entries) {
-    return { ok: false, message: `${path} exceeds the runtime entry limit` };
+    return traversalError(path, "exceeds the runtime entry limit");
   }
   state.entries += count;
   return { ok: true };
 };
 
-const validateValue = (
+const isRuntimeLeaf = (
   value: unknown,
-  path: string,
-  depth: number,
-  state: TraversalState & { seen: WeakSet<object> },
-): ValidationResult => {
-  if (
+): value is RuntimePrimitive | RuntimeFunction => {
+  return (
     value === undefined ||
     value === null ||
     typeof value === "boolean" ||
     typeof value === "number" ||
     typeof value === "string" ||
     typeof value === "function"
-  ) {
-    return { ok: true };
-  }
-
-  if (depth > state.limits.maxDepth) {
-    return { ok: false, message: `${path} exceeds the runtime depth limit` };
-  }
-  if (typeof value !== "object") {
-    return { ok: false, message: `${path} is not a supported runtime value` };
-  }
-  if (state.seen.has(value)) return { ok: true };
-  state.seen.add(value);
-
-  if (Array.isArray(value)) {
-    const lenDesc = Object.getOwnPropertyDescriptor(value, "length");
-    if (
-      lenDesc === undefined ||
-      isAccessorDescriptor(lenDesc) ||
-      !("value" in lenDesc) ||
-      typeof (lenDesc as { value: unknown }).value !== "number"
-    ) {
-      return { ok: false, message: `${path} must be an Array` };
-    }
-
-    const len = (lenDesc as { value: number }).value;
-    const counted = consumeEntries(state, len, path);
-    if (!counted.ok) return counted;
-    for (let i = 0; i < len; i++) {
-      const d = Object.getOwnPropertyDescriptor(value, String(i));
-      if (d && isAccessorDescriptor(d)) {
-        return {
-          ok: false,
-          message: `${path}[${i}] must be a data property`,
-        };
-      }
-
-      const v = d && "value" in d ? (d as { value: unknown }).value : undefined;
-      const r = validateValue(v, `${path}[${i}]`, depth + 1, state);
-      if (!r.ok) return r;
-    }
-
-    return { ok: true };
-  }
-
-  if (isPlainObject(value)) {
-    const descs = Object.getOwnPropertyDescriptors(value);
-    const counted = consumeEntries(state, Reflect.ownKeys(descs).length, path);
-    if (!counted.ok) return counted;
-    for (const [k, d] of Object.entries(descs)) {
-      // Ignore non-enumerable properties by design.
-      if (!d.enumerable) continue;
-      if (isAccessorDescriptor(d)) {
-        return {
-          ok: false,
-          message: `${path}['${k}'] must be a data property`,
-        };
-      }
-      if (!("value" in d)) {
-        return {
-          ok: false,
-          message: `${path}['${k}'] must be a data property`,
-        };
-      }
-      const r = validateValue(
-        (d as { value: unknown }).value,
-        `${path}['${k}']`,
-        depth + 1,
-        state,
-      );
-      if (!r.ok) return r;
-    }
-    return { ok: true };
-  }
-
-  return { ok: false, message: `${path} is not a supported runtime value` };
+  );
 };
 
-const normalizeRuntimeValue = (
+const traverseRuntimeValue = (
   value: unknown,
   path: string,
   depth: number,
-  state: TraversalState & { seen: WeakMap<object, RuntimeValue> },
-): NormalizeResult => {
-  if (
-    value === undefined ||
-    value === null ||
-    typeof value === "boolean" ||
-    typeof value === "number" ||
-    typeof value === "string" ||
-    typeof value === "function"
-  ) {
-    return { ok: true, value: value as RuntimeValue };
-  }
+  state: TraversalState,
+): TraversalResult => {
+  const rootPath: RuntimePath = { kind: "root", value: path };
+  let topFrame: TraversalFrame | undefined;
+  let currentValue = value;
+  let currentPath: RuntimePath = rootPath;
+  let currentDepth = depth;
+  let currentTarget: NormalizeTarget | undefined;
+  let normalized: RuntimeValue = undefined;
 
-  if (depth > state.limits.maxDepth) {
-    return { ok: false, message: `${path} exceeds the runtime depth limit` };
-  }
-  if (typeof value !== "object") {
-    return { ok: false, message: `${path} is not a supported runtime value` };
-  }
-  const seen = state.seen.get(value);
-  if (seen !== undefined) return { ok: true, value: seen };
-
-  if (Array.isArray(value)) {
-    const lenDesc = Object.getOwnPropertyDescriptor(value, "length");
-    if (
-      lenDesc === undefined ||
-      isAccessorDescriptor(lenDesc) ||
-      !("value" in lenDesc) ||
-      typeof (lenDesc as { value: unknown }).value !== "number"
-    ) {
-      return { ok: false, message: `${path} must be an Array` };
+  const assignNormalized = (
+    target: NormalizeTarget | undefined,
+    normalizedValue: RuntimeValue,
+  ): void => {
+    if (target === undefined) {
+      normalized = normalizedValue;
+    } else if (target.kind === "array") {
+      target.value[target.index] = normalizedValue;
+    } else {
+      Object.defineProperty(target.value, target.key, {
+        value: normalizedValue,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
     }
-    const len = (lenDesc as { value: number }).value;
-    const counted = consumeEntries(state, len, path);
-    if (!counted.ok) return counted;
-    const out: RuntimeValue[] = Array.from({ length: len });
-    state.seen.set(value, out);
-    for (let i = 0; i < len; i++) {
-      const d = Object.getOwnPropertyDescriptor(value, String(i));
-      if (d && isAccessorDescriptor(d)) {
-        return {
-          ok: false,
-          message: `${path}[${i}] must be a data property`,
-        };
+  };
+
+  while (true) {
+    if (isRuntimeLeaf(currentValue)) {
+      if (state.mode === "normalize") {
+        assignNormalized(currentTarget, currentValue);
       }
-      const v = d && "value" in d ? (d as { value: unknown }).value : undefined;
-      const nr = normalizeRuntimeValue(v, `${path}[${i}]`, depth + 1, state);
-      if (!nr.ok) return nr;
-      out[i] = nr.value;
-    }
-    return { ok: true, value: out };
-  }
+    } else {
+      if (currentDepth > state.limits.maxDepth) {
+        return traversalError(currentPath, "exceeds the runtime depth limit");
+      }
+      if (typeof currentValue !== "object") {
+        return traversalError(currentPath, "is not a supported runtime value");
+      }
 
-  if (!isPlainObject(value)) {
-    return { ok: false, message: `${path} is not a supported runtime value` };
-  }
+      let alreadySeen = false;
+      if (state.mode === "validate") {
+        alreadySeen = state.seen.has(currentValue);
+        if (!alreadySeen) state.seen.add(currentValue);
+      } else {
+        const seen = state.seen.get(currentValue);
+        if (seen !== undefined) {
+          assignNormalized(currentTarget, seen);
+          alreadySeen = true;
+        }
+      }
 
-  const out = Object.create(null) as Env;
-  state.seen.set(value, out);
-  const descs = Object.getOwnPropertyDescriptors(
-    value as Record<string, unknown>,
-  );
-  const counted = consumeEntries(state, Reflect.ownKeys(descs).length, path);
-  if (!counted.ok) return counted;
-  for (const [k, d] of Object.entries(descs)) {
-    if (!d.enumerable) continue;
-    if (isAccessorDescriptor(d) || !("value" in d)) {
-      return { ok: false, message: `${path}['${k}'] must be a data property` };
+      if (!alreadySeen) {
+        if (Array.isArray(currentValue)) {
+          const lengthDescriptor = Object.getOwnPropertyDescriptor(
+            currentValue,
+            "length",
+          );
+          if (
+            lengthDescriptor === undefined ||
+            !("value" in lengthDescriptor) ||
+            typeof lengthDescriptor.value !== "number"
+          ) {
+            return traversalError(currentPath, "must be an Array");
+          }
+
+          const length = lengthDescriptor.value;
+          const counted = consumeEntries(state, length, currentPath);
+          if (!counted.ok) return counted;
+
+          if (state.mode === "normalize") {
+            const output: RuntimeArray = Array.from({ length });
+            state.seen.set(currentValue, output);
+            topFrame = {
+              kind: "array",
+              mode: "normalize",
+              value: currentValue,
+              output,
+              path: currentPath,
+              depth: currentDepth,
+              index: 0,
+              length,
+              target: currentTarget,
+              previous: topFrame,
+            };
+          } else {
+            topFrame = {
+              kind: "array",
+              mode: "validate",
+              value: currentValue,
+              path: currentPath,
+              depth: currentDepth,
+              index: 0,
+              length,
+              previous: topFrame,
+            };
+          }
+        } else {
+          if (!isPlainObject(currentValue)) {
+            return traversalError(
+              currentPath,
+              "is not a supported runtime value",
+            );
+          }
+
+          let output: RuntimeObject | undefined;
+          if (state.mode === "normalize") {
+            output = Object.create(null) as RuntimeObject;
+            state.seen.set(currentValue, output);
+          }
+          const descriptors = Object.getOwnPropertyDescriptors(currentValue);
+          const counted = consumeEntries(
+            state,
+            Reflect.ownKeys(descriptors).length,
+            currentPath,
+          );
+          if (!counted.ok) return counted;
+          const entries = Object.entries(descriptors);
+
+          if (state.mode === "normalize") {
+            if (output === undefined) {
+              throw new Error("runtime normalization object output is missing");
+            }
+            topFrame = {
+              kind: "object",
+              mode: "normalize",
+              entries,
+              output,
+              path: currentPath,
+              depth: currentDepth,
+              index: 0,
+              target: currentTarget,
+              previous: topFrame,
+            };
+          } else {
+            topFrame = {
+              kind: "object",
+              mode: "validate",
+              entries,
+              path: currentPath,
+              depth: currentDepth,
+              index: 0,
+              previous: topFrame,
+            };
+          }
+        }
+      }
     }
-    const nr = normalizeRuntimeValue(
-      (d as { value: unknown }).value,
-      `${path}['${k}']`,
-      depth + 1,
-      state,
-    );
-    if (!nr.ok) return nr;
-    Object.defineProperty(out, k, {
-      value: nr.value,
-      enumerable: true,
-      writable: true,
-      configurable: true,
-    });
+
+    let hasNextValue = false;
+    while (topFrame !== undefined) {
+      const frame = topFrame;
+      if (frame.kind === "array") {
+        if (frame.index >= frame.length) {
+          topFrame = frame.previous;
+          if (frame.mode === "normalize") {
+            assignNormalized(frame.target, frame.output);
+          }
+          continue;
+        }
+
+        const index = frame.index;
+        const descriptor = Object.getOwnPropertyDescriptor(
+          frame.value,
+          String(index),
+        );
+        frame.index++;
+        if (descriptor !== undefined && !("value" in descriptor)) {
+          return traversalError(
+            {
+              kind: "child",
+              parent: frame.path,
+              segment: `[${index}]`,
+            },
+            "must be a data property",
+          );
+        }
+
+        const childValue =
+          descriptor === undefined ? undefined : descriptor.value;
+        if (isRuntimeLeaf(childValue)) {
+          if (frame.mode === "normalize") frame.output[index] = childValue;
+          continue;
+        }
+
+        currentValue = childValue;
+        currentPath = {
+          kind: "child",
+          parent: frame.path,
+          segment: `[${index}]`,
+        };
+        currentDepth = frame.depth + 1;
+        currentTarget =
+          frame.mode === "normalize"
+            ? { kind: "array", value: frame.output, index }
+            : undefined;
+        hasNextValue = true;
+        break;
+      }
+
+      if (frame.index >= frame.entries.length) {
+        topFrame = frame.previous;
+        if (frame.mode === "normalize") {
+          assignNormalized(frame.target, frame.output);
+        }
+        continue;
+      }
+
+      const entry = frame.entries[frame.index];
+      if (entry === undefined) {
+        throw new Error("runtime traversal object entry is missing");
+      }
+      frame.index++;
+      const [key, descriptor] = entry;
+      if (!descriptor.enumerable) continue;
+      if (!("value" in descriptor)) {
+        return traversalError(
+          {
+            kind: "child",
+            parent: frame.path,
+            segment: `['${key}']`,
+          },
+          "must be a data property",
+        );
+      }
+
+      const childValue = descriptor.value;
+      if (isRuntimeLeaf(childValue)) {
+        if (frame.mode === "normalize") {
+          Object.defineProperty(frame.output, key, {
+            value: childValue,
+            enumerable: true,
+            writable: true,
+            configurable: true,
+          });
+        }
+        continue;
+      }
+
+      currentValue = childValue;
+      currentPath = {
+        kind: "child",
+        parent: frame.path,
+        segment: `['${key}']`,
+      };
+      currentDepth = frame.depth + 1;
+      currentTarget =
+        frame.mode === "normalize"
+          ? { kind: "object", value: frame.output, key }
+          : undefined;
+      hasNextValue = true;
+      break;
+    }
+
+    if (!hasNextValue) {
+      return {
+        ok: true,
+        value: state.mode === "validate" ? (value as RuntimeValue) : normalized,
+      };
+    }
   }
-  return { ok: true, value: out };
 };
 
 export const isRuntimeValue = (
@@ -256,9 +424,10 @@ export const isRuntimeValue = (
   limits: RuntimeValueLimits = { maxDepth: 64, maxEntries: 10_000 },
 ): value is RuntimeValue => {
   try {
-    return validateValue(value, "value", 0, {
+    return traverseRuntimeValue(value, "value", 0, {
       entries: 0,
       limits,
+      mode: "validate",
       seen: new WeakSet(),
     }).ok;
   } catch {
@@ -279,9 +448,10 @@ export const normalizeEnv = (
       };
     }
 
-    const normalized = normalizeRuntimeValue(env, "env", 0, {
+    const normalized = traverseRuntimeValue(env, "env", 0, {
       entries: 0,
       limits,
+      mode: "normalize",
       seen: new WeakMap(),
     });
     if (!normalized.ok) return normalized;
