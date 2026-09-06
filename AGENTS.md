@@ -4,11 +4,12 @@ Expression language toolkit for TypeScript/JavaScript.
 
 ## Goals
 
-- Small, dependency-light core.
-- Runs anywhere JS runs (Deno, Node, browsers).
-- Deterministic parsing and evaluation (no `eval`, no `new Function`).
-- Great diagnostics (spans + line/column + caret snippets).
-- Safe-by-default evaluation with explicit allow-lists and resource budgets.
+- Parse a documented expression grammar into a typed AST with source spans.
+- Evaluate expressions against an explicit environment and fixed standard library.
+- Keep parser, runtime-value, and interpreter limits explicit.
+- Treat environment functions as trusted host code.
+- Use Bun for development while retaining Node npm + Deno JSR compatibility.
+- Keep runtime and security claims aligned with CI and the implementation.
 
 ## Project Structure
 
@@ -21,7 +22,7 @@ Expression language toolkit for TypeScript/JavaScript.
 
 ## Commands
 
-- `bun run check`: format check, lint, type-check, and test.
+- `bun run check`: format, lint, type-check, test, presentation, and benchmark checks.
 - `bun run test`: run tests.
 - `bun run build`: build the npm package into `dist/`.
 - `bun run package:check`: build and validate npm package metadata and types.

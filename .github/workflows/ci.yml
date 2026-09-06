@@ -20,6 +20,7 @@ jobs:
       lint: ${{ steps.lint.outcome }}
       types: ${{ steps.types.outcome }}
       tests: ${{ steps.tests.outcome }}
+      presentation: ${{ steps.presentation.outcome }}
       benchmark_verification: ${{ steps.benchmark_verification.outcome }}
       package: ${{ steps.package.outcome }}
       runtime: ${{ steps.runtime.outcome }}
@@ -56,6 +57,11 @@ jobs:
         continue-on-error: true
         run: bun run test
 
+      - name: Verify presentation metadata and examples
+        id: presentation
+        continue-on-error: true
+        run: bun run presentation:check
+
       - name: Verify benchmark correctness
         id: benchmark_verification
         continue-on-error: true
@@ -83,11 +89,12 @@ jobs:
           LINT: ${{ steps.lint.outcome }}
           TYPES: ${{ steps.types.outcome }}
           TESTS: ${{ steps.tests.outcome }}
+          PRESENTATION: ${{ steps.presentation.outcome }}
           BENCHMARK_VERIFICATION: ${{ steps.benchmark_verification.outcome }}
           PACKAGE: ${{ steps.package.outcome }}
           RUNTIME: ${{ steps.runtime.outcome }}
         run: |
-          for result in "$FORMATTING" "$LINT" "$TYPES" "$TESTS" "$BENCHMARK_VERIFICATION" "$PACKAGE" "$RUNTIME"; do
+          for result in "$FORMATTING" "$LINT" "$TYPES" "$TESTS" "$PRESENTATION" "$BENCHMARK_VERIFICATION" "$PACKAGE" "$RUNTIME"; do
             if [[ "$result" != "success" ]]; then
               exit 1
             fi
@@ -97,7 +104,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: [24, 26]
+        node-version: [22, 24, 26]
 
     steps:
       - name: Checkout repository
@@ -125,8 +132,14 @@ jobs:
           consumer="${RUNNER_TEMP}/consumer"
           npm install --prefix "${consumer}" "${RUNNER_TEMP}/${package}"
           cd "${consumer}"
-          node --input-type=module -e \
-            'const { evaluateExpression } = await import("@claudiu-ceia/exp"); if (evaluateExpression("1 + 2").value !== 3) process.exit(1)'
+          node --input-type=module -e '
+            import { readFile } from "node:fs/promises";
+            const manifest = JSON.parse(await readFile("node_modules/@claudiu-ceia/exp/package.json", "utf8"));
+            const expected = "TypeScript expression parser and evaluator for application-defined filters, conditions, and formulas.";
+            if (manifest.description !== expected) process.exit(1);
+          '
+          cp -R node_modules/@claudiu-ceia/exp/examples ./examples
+          node examples/readme.test.ts
 
   jsr:
     runs-on: ubuntu-latest
@@ -154,12 +167,7 @@ jobs:
         run: deno publish --dry-run
 
       - name: Verify Deno runtime
-        run: |
-          deno eval '
-            import { evaluateExpression } from "./mod.ts";
-            const result = evaluateExpression("1 + 2");
-            if (!result.success || result.value !== 3) Deno.exit(1);
-          '
+        run: deno run --import-map=scripts/deno-import-map.json scripts/deno-readme.test.js
 
   benchmark:
     runs-on: ubuntu-latest
@@ -266,6 +274,7 @@ jobs:
           LINT: ${{ needs.quality.outputs.lint }}
           TYPES: ${{ needs.quality.outputs.types }}
           TESTS: ${{ needs.quality.outputs.tests }}
+          PRESENTATION: ${{ needs.quality.outputs.presentation }}
           BENCHMARK_VERIFICATION: ${{ needs.quality.outputs.benchmark_verification }}
           PACKAGE: ${{ needs.quality.outputs.package }}
           RUNTIME: ${{ needs.quality.outputs.runtime }}
@@ -289,10 +298,11 @@ jobs:
             printf "| Lint | %s |\n" "$(status "$LINT")"
             printf "| Types | %s |\n" "$(status "$TYPES")"
             printf "| Tests | %s |\n" "$(status "$TESTS")"
+            printf "| Presentation | %s |\n" "$(status "$PRESENTATION")"
             printf "| Benchmark correctness | %s |\n" "$(status "$BENCHMARK_VERIFICATION")"
             printf "| Package | %s |\n" "$(status "$PACKAGE")"
             printf "| Bun runtime | %s |\n" "$(status "$RUNTIME")"
-            printf "| Node 24/26 | %s |\n" "$(status "$NPM_COMPAT")"
+            printf "| Node 22/24/26 | %s |\n" "$(status "$NPM_COMPAT")"
             printf "| JSR | %s |\n" "$(status "$JSR")"
             printf "| Performance | %s |\n\n" "$(status "$PERFORMANCE")"
           } > ci-report.md

@@ -18,11 +18,13 @@
       "package.json",
       "scripts/",
       "tests/",
+      "tsconfig.examples.json",
       "tsconfig.build.json",
       "tsconfig.json"
     ]
   },
   "imports": {
+    "@claudiu-ceia/exp": "./mod.ts",
     "@claudiu-ceia/combine": "jsr:@claudiu-ceia/combine@^0.11.0"
   }
 }

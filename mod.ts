@@ -1,3 +1,11 @@
+/**
+ * Parse and evaluate application-defined filters, conditions, and formulas.
+ *
+ * Expressions are parsed into a typed AST and interpreted against an explicit
+ * environment.
+ *
+ * @module
+ */
 export type { BinaryOp, Expr, NodeBase, Span, UnaryOp } from "./src/ast/mod.ts";
 export {
   formatCaret,

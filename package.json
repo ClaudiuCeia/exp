@@ -1,14 +1,22 @@
 {
   "name": "@claudiu-ceia/exp",
   "version": "0.2.0",
-  "description": "Small, deterministic expression language toolkit with safe evaluation and rich diagnostics.",
+  "description": "TypeScript expression parser and evaluator for application-defined filters, conditions, and formulas.",
   "keywords": [
-    "ast",
+    "bun",
+    "conditions",
+    "deno",
+    "diagnostics",
     "dsl",
-    "expression",
+    "expression-evaluator",
+    "expression-language",
+    "expression-parser",
+    "filters",
+    "formulas",
     "interpreter",
-    "parser",
-    "safe-evaluation",
+    "nodejs",
+    "parser-combinators",
+    "typed-ast",
     "typescript"
   ],
   "homepage": "https://github.com/ClaudiuCeia/exp#readme",
@@ -22,6 +30,8 @@
   },
   "files": [
     "dist",
+    "docs",
+    "examples",
     "LICENSE",
     "README.md"
   ],
@@ -35,7 +45,7 @@
     }
   },
   "scripts": {
-    "check": "bun run format:check && bun run lint && bun run typecheck && bun run test && bun run bench:verify",
+    "check": "bun run format:check && bun run lint && bun run typecheck && bun run test && bun run presentation:check && bun run bench:verify",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "lint": "oxlint --deny-warnings .",
@@ -44,6 +54,7 @@
     "coverage": "bun test --coverage ./tests",
     "build": "rm -rf dist && tsc --project tsconfig.build.json",
     "package:check": "bun run build && publint && attw --pack . --profile esm-only",
+    "presentation:check": "bun run build && tsc --noEmit --project tsconfig.examples.json && bun run examples/readme.test.ts && bun run scripts/check_metadata.ts",
     "prepack": "bun run build",
     "bench": "bun run bench/parse.bench.ts && bun run bench/eval.bench.ts",
     "bench:comparison": "bun run bench/comparison.bench.ts",
@@ -71,7 +82,7 @@
     "typescript": "~7.0.0"
   },
   "engines": {
-    "node": ">=24"
+    "node": ">=22"
   },
   "packageManager": "bun@1.4.0"
 }
