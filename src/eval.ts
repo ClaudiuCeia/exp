@@ -26,12 +26,18 @@ export type EvalOptions = Readonly<{
    */
   env?: Record<string, RuntimeValue>;
 
-  /** Max AST nodes visited (rough compute budget). Default: 10_000 */
+  /**
+   * Max AST traversal work during validation and, separately, max nodes visited
+   * during evaluation. Validation charges the root and every AST edge.
+   * Default: 10_000.
+   */
   maxSteps?: number;
-  /** Max recursion depth while evaluating. Default: 256 */
+  /** Max AST depth during validation and evaluation. Default: 256 */
   maxDepth?: number;
   /** Max elements allowed in an array literal. Default: 1_000 */
   maxArrayElements?: number;
+  /** Max arguments allowed in one call expression. Default: 1_000 */
+  maxCallArguments?: number;
   /** Max nesting in environment and function-return values. Default: 64 */
   maxRuntimeDepth?: number;
   /** Max entries in environment and function-return values. Default: 10_000 */
@@ -58,6 +64,7 @@ export type EvalOptions = Readonly<{
 export type EvalError = Readonly<{
   message: string;
   span?: Span;
+  /** Validation work or evaluation node visits completed at failure. */
   steps?: number;
   /** Parse error index when evaluation fails due to parse failure. */
   index?: number;
@@ -98,12 +105,15 @@ type Ctx = {
   depth: number;
   maxDepth: number;
   maxArrayElements: number;
+  maxCallArguments: number;
   maxRuntimeDepth: number;
   maxRuntimeEntries: number;
   unknownIdentifier: "error" | "undefined";
 };
 
 const FORBIDDEN_MEMBERS = new Set(["__proto__", "prototype", "constructor"]);
+const DEFAULT_MAX_ARRAY_ELEMENTS = 1_000;
+const DEFAULT_MAX_CALL_ARGUMENTS = DEFAULT_MAX_ARRAY_ELEMENTS;
 
 const isTruthy = (v: RuntimeValue): boolean => {
   return !!v;
@@ -346,6 +356,10 @@ const evalMemberExpr = (expr: MemberExpr, ctx: Ctx): EvalResult => {
 };
 
 const evalCallExpr = (expr: CallExpr, ctx: Ctx): EvalResult => {
+  if (expr.args.length > ctx.maxCallArguments) {
+    return evalError("call argument list too large", expr.span, ctx.steps);
+  }
+
   let fn: RuntimeValue;
   let receiver: RuntimeValue | undefined;
 
@@ -486,183 +500,304 @@ const validateSpan = (value: unknown): AstValidationResult => {
 const readAstChildren = (
   value: object,
   property: string,
-): { ok: true; value: unknown[] } | { ok: false; message: string } => {
+  maxLength: number,
+  tooLargeMessage: string,
+):
+  | { ok: true; value: unknown[]; length: number }
+  | { ok: false; message: string } => {
   const field = readAstProperty(value, property);
   if (!field.ok) return field;
   if (!Array.isArray(field.value)) {
     return { ok: false, message: `'${property}' must be an Array` };
   }
 
-  const children: unknown[] = [];
-  for (let i = 0; i < field.value.length; i++) {
-    const child = Object.getOwnPropertyDescriptor(field.value, String(i));
-    if (child === undefined || !("value" in child)) {
-      return {
-        ok: false,
-        message: `'${property}[${i}]' must be an own data property`,
-      };
-    }
-    children.push(child.value);
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(
+    field.value,
+    "length",
+  );
+  if (lengthDescriptor === undefined || !("value" in lengthDescriptor)) {
+    return {
+      ok: false,
+      message: `'${property}.length' must be an own data property`,
+    };
   }
-  return { ok: true, value: children };
+  const length = lengthDescriptor.value;
+  if (
+    typeof length !== "number" ||
+    !Number.isSafeInteger(length) ||
+    length < 0
+  ) {
+    return {
+      ok: false,
+      message: `'${property}.length' must be a non-negative safe integer`,
+    };
+  }
+  if (length > maxLength) return { ok: false, message: tooLargeMessage };
+
+  return { ok: true, value: field.value, length };
 };
 
 const validateAst = (
   root: unknown,
-  maxNodes: number,
+  maxWork: number,
   maxDepth: number,
   maxArrayElements: number,
-): AstValidationResult => {
-  type Frame = { value: unknown; depth: number; exit: boolean };
-  const pending: Frame[] = [{ value: root, depth: 0, exit: false }];
+  maxCallArguments: number,
+): AstValidationResult & Readonly<{ steps: number }> => {
+  type Frame =
+    | Readonly<{
+        type: "node";
+        value: unknown;
+        depth: number;
+        charged: boolean;
+      }>
+    | Readonly<{ type: "exit"; value: object }>
+    | Readonly<{
+        type: "property";
+        value: object;
+        property: string;
+        depth: number;
+      }>
+    | Readonly<{
+        type: "children";
+        value: unknown[];
+        property: string;
+        index: number;
+        length: number;
+        depth: number;
+      }>;
+  const pending: Frame[] = [
+    { type: "node", value: root, depth: 0, charged: false },
+  ];
   const states = new WeakMap<object, "active" | "done">();
-  let nodes = 0;
+  let steps = 0;
 
-  try {
-    while (pending.length > 0) {
-      const frame = pending.pop()!;
-      if (frame.value === null || typeof frame.value !== "object") {
-        return astValidationError("expression node must be an object");
-      }
-      if (frame.exit) {
-        states.set(frame.value, "done");
-        continue;
-      }
+  const chargeTraversal = (): AstValidationResult | null => {
+    steps++;
+    return steps > maxWork
+      ? astValidationError("validation budget exceeded")
+      : null;
+  };
 
-      const state = states.get(frame.value);
-      if (state === "active") return astValidationError("cycle detected");
-      if (state === "done") continue;
-      if (frame.depth > maxDepth) {
-        return astValidationError("recursion limit exceeded");
-      }
-      nodes++;
-      if (nodes > maxNodes) {
-        return astValidationError("validation budget exceeded");
-      }
+  const run = (): AstValidationResult => {
+    try {
+      while (pending.length > 0) {
+        const frame = pending.pop();
+        if (frame === undefined) break;
 
-      states.set(frame.value, "active");
-      pending.push({ ...frame, exit: true });
-
-      const span = readAstProperty(frame.value, "span");
-      if (!span.ok) return astValidationError(span.message);
-      const spanResult = validateSpan(span.value);
-      if (!spanResult.ok) return spanResult;
-
-      const kind = readAstProperty(frame.value, "kind");
-      if (!kind.ok) return astValidationError(kind.message);
-      if (typeof kind.value !== "string") {
-        return astValidationError("'kind' must be a string");
-      }
-
-      const readChild = (property: string): AstValidationResult => {
-        const child = readAstProperty(frame.value as object, property);
-        if (!child.ok) return astValidationError(child.message);
-        pending.push({
-          value: child.value,
-          depth: frame.depth + 1,
-          exit: false,
-        });
-        return { ok: true };
-      };
-      const requireType = (
-        property: string,
-        type: "boolean" | "number" | "string",
-      ): AstValidationResult => {
-        const field = readAstProperty(frame.value as object, property);
-        if (!field.ok) return astValidationError(field.message);
-        const matches =
-          type === "boolean"
-            ? typeof field.value === "boolean"
-            : type === "number"
-              ? typeof field.value === "number"
-              : typeof field.value === "string";
-        if (!matches) {
-          return astValidationError(`'${property}' must be a ${type}`);
+        if (frame.type === "exit") {
+          states.set(frame.value, "done");
+          continue;
         }
-        return { ok: true };
-      };
 
-      let result: AstValidationResult = { ok: true };
-      switch (kind.value) {
-        case "number":
-          result = requireType("value", "number");
-          break;
-        case "string":
-          result = requireType("value", "string");
-          break;
-        case "boolean":
-          result = requireType("value", "boolean");
-          break;
-        case "null":
-        case "undefined":
-          break;
-        case "identifier":
-          result = requireType("name", "string");
-          break;
-        case "array": {
-          const elements = readAstChildren(frame.value, "elements");
-          if (!elements.ok) return astValidationError(elements.message);
-          if (elements.value.length > maxArrayElements) {
-            return astValidationError("array literal too large");
-          }
-          for (const element of elements.value) {
-            pending.push({
-              value: element,
-              depth: frame.depth + 1,
-              exit: false,
-            });
-          }
-          break;
+        if (frame.type === "property") {
+          const budget = chargeTraversal();
+          if (budget !== null) return budget;
+          const child = readAstProperty(frame.value, frame.property);
+          if (!child.ok) return astValidationError(child.message);
+          pending.push({
+            type: "node",
+            value: child.value,
+            depth: frame.depth,
+            charged: true,
+          });
+          continue;
         }
-        case "unary":
-          result = requireType("op", "string");
-          if (result.ok) result = readChild("expr");
-          break;
-        case "binary":
-          result = requireType("op", "string");
-          if (result.ok) result = readChild("right");
-          if (result.ok) result = readChild("left");
-          break;
-        case "member":
-          result = requireType("property", "string");
-          if (result.ok) result = readChild("object");
-          break;
-        case "call": {
-          result = readChild("callee");
-          if (!result.ok) break;
-          const args = readAstChildren(frame.value, "args");
-          if (!args.ok) return astValidationError(args.message);
-          for (const arg of args.value) {
-            pending.push({ value: arg, depth: frame.depth + 1, exit: false });
+
+        if (frame.type === "children") {
+          if (frame.index >= frame.length) continue;
+          const budget = chargeTraversal();
+          if (budget !== null) return budget;
+          const child = Object.getOwnPropertyDescriptor(
+            frame.value,
+            String(frame.index),
+          );
+          if (child === undefined || !("value" in child)) {
+            return astValidationError(
+              `'${frame.property}[${frame.index}]' must be an own data property`,
+            );
           }
-          break;
+          pending.push({ ...frame, index: frame.index + 1 });
+          pending.push({
+            type: "node",
+            value: child.value,
+            depth: frame.depth,
+            charged: true,
+          });
+          continue;
         }
-        case "conditional":
-          result = readChild("alternate");
-          if (result.ok) result = readChild("consequent");
-          if (result.ok) result = readChild("test");
-          break;
-        default:
-          return astValidationError("unknown expression kind");
+
+        if (!frame.charged) {
+          const budget = chargeTraversal();
+          if (budget !== null) return budget;
+        }
+        if (frame.value === null || typeof frame.value !== "object") {
+          return astValidationError("expression node must be an object");
+        }
+
+        const node = frame.value;
+        if (frame.depth > maxDepth) {
+          return astValidationError("recursion limit exceeded");
+        }
+        const state = states.get(node);
+        if (state === "active") return astValidationError("cycle detected");
+        if (state === "done") continue;
+
+        states.set(node, "active");
+        pending.push({ type: "exit", value: node });
+
+        const span = readAstProperty(node, "span");
+        if (!span.ok) return astValidationError(span.message);
+        const spanResult = validateSpan(span.value);
+        if (!spanResult.ok) return spanResult;
+
+        const kind = readAstProperty(node, "kind");
+        if (!kind.ok) return astValidationError(kind.message);
+        if (typeof kind.value !== "string") {
+          return astValidationError("'kind' must be a string");
+        }
+
+        const queueChild = (property: string): void => {
+          pending.push({
+            type: "property",
+            value: node,
+            property,
+            depth: frame.depth + 1,
+          });
+        };
+        const queueChildren = (
+          children: Readonly<{
+            value: unknown[];
+            length: number;
+          }>,
+          property: string,
+        ): void => {
+          if (children.length === 0) return;
+          pending.push({
+            type: "children",
+            value: children.value,
+            property,
+            index: 0,
+            length: children.length,
+            depth: frame.depth + 1,
+          });
+        };
+        const requireType = (
+          property: string,
+          type: "boolean" | "number" | "string",
+        ): AstValidationResult => {
+          const field = readAstProperty(node, property);
+          if (!field.ok) return astValidationError(field.message);
+          const matches =
+            type === "boolean"
+              ? typeof field.value === "boolean"
+              : type === "number"
+                ? typeof field.value === "number"
+                : typeof field.value === "string";
+          if (!matches) {
+            return astValidationError(`'${property}' must be a ${type}`);
+          }
+          return { ok: true };
+        };
+
+        let result: AstValidationResult = { ok: true };
+        switch (kind.value) {
+          case "number":
+            result = requireType("value", "number");
+            break;
+          case "string":
+            result = requireType("value", "string");
+            break;
+          case "boolean":
+            result = requireType("value", "boolean");
+            break;
+          case "null":
+          case "undefined":
+            break;
+          case "identifier":
+            result = requireType("name", "string");
+            break;
+          case "array": {
+            const elements = readAstChildren(
+              node,
+              "elements",
+              maxArrayElements,
+              "array literal too large",
+            );
+            if (!elements.ok) return astValidationError(elements.message);
+            queueChildren(elements, "elements");
+            break;
+          }
+          case "unary":
+            result = requireType("op", "string");
+            if (result.ok) queueChild("expr");
+            break;
+          case "binary":
+            result = requireType("op", "string");
+            if (result.ok) queueChild("right");
+            if (result.ok) queueChild("left");
+            break;
+          case "member":
+            result = requireType("property", "string");
+            if (result.ok) queueChild("object");
+            break;
+          case "call": {
+            const args = readAstChildren(
+              node,
+              "args",
+              maxCallArguments,
+              "call argument list too large",
+            );
+            if (!args.ok) return astValidationError(args.message);
+            queueChild("callee");
+            queueChildren(args, "args");
+            break;
+          }
+          case "conditional":
+            queueChild("alternate");
+            queueChild("consequent");
+            queueChild("test");
+            break;
+          default:
+            return astValidationError("unknown expression kind");
+        }
+        if (!result.ok) return result;
       }
-      if (!result.ok) return result;
+    } catch (error) {
+      return astValidationError(
+        error instanceof Error ? error.message : String(error),
+      );
     }
-  } catch (error) {
-    return astValidationError(
-      error instanceof Error ? error.message : String(error),
-    );
-  }
 
-  return { ok: true };
+    return { ok: true };
+  };
+
+  return { ...run(), steps };
 };
 
-/** Evaluate a pre-parsed AST. */
+/**
+ * Defensively validate and evaluate a pre-parsed AST.
+ *
+ * Validation does not copy AST child arrays. It applies `maxArrayElements` and
+ * `maxCallArguments` before reading entries, then charges `maxSteps` for the
+ * root and every traversed edge. Evaluation starts a separate `maxSteps`
+ * counter.
+ */
 export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
   const throwOnError = opts.throwOnError ?? true;
   const limitValues = [
     readEvaluationLimit(opts.maxSteps, 10_000, "maxSteps"),
     readEvaluationLimit(opts.maxDepth, 256, "maxDepth"),
-    readEvaluationLimit(opts.maxArrayElements, 1_000, "maxArrayElements"),
+    readEvaluationLimit(
+      opts.maxArrayElements,
+      DEFAULT_MAX_ARRAY_ELEMENTS,
+      "maxArrayElements",
+    ),
+    readEvaluationLimit(
+      opts.maxCallArguments,
+      DEFAULT_MAX_CALL_ARGUMENTS,
+      "maxCallArguments",
+    ),
     readEvaluationLimit(opts.maxRuntimeDepth, 64, "maxRuntimeDepth"),
     readEvaluationLimit(opts.maxRuntimeEntries, 10_000, "maxRuntimeEntries"),
   ] as const;
@@ -678,6 +813,7 @@ export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
     maxSteps,
     maxDepth,
     maxArrayElements,
+    maxCallArguments,
     maxRuntimeDepth,
     maxRuntimeEntries,
   ] = limitValues as readonly number[];
@@ -687,9 +823,13 @@ export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
     maxSteps,
     maxDepth,
     maxArrayElements,
+    maxCallArguments,
   );
   if (!astResult.ok) {
-    const error: EvalError = { message: astResult.message, steps: 0 };
+    const error: EvalError = {
+      message: astResult.message,
+      steps: astResult.steps,
+    };
     if (throwOnError) throw new ExpEvalError(error);
     return { success: false, error };
   }
@@ -736,6 +876,7 @@ export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
     depth: 0,
     maxDepth,
     maxArrayElements,
+    maxCallArguments,
     maxRuntimeDepth,
     maxRuntimeEntries,
     unknownIdentifier: opts.unknownIdentifier ?? "error",
@@ -756,7 +897,10 @@ export type EvaluateExpressionOptions = EvalOptions &
     maxInputLength?: number;
     /** Maximum recursive parser syntax nesting. Default: 64. */
     maxNestingDepth?: number;
-    /** Maximum number of nodes in the parsed AST. Default: 10,000. */
+    /**
+     * Maximum AST node allocations during parsing, including transient nodes.
+     * Default: 10,000.
+     */
     maxNodes?: number;
   }>;
 

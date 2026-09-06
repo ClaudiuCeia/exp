@@ -70,7 +70,11 @@ The package has no built-in:
 - numeric magnitude bound
 - preemption of environment functions
 
-`maxSteps` limits AST validation and interpreter visits. `maxRuntimeDepth` and
+AST validation and evaluation each receive an independent `maxSteps` budget.
+Validation charges the root and every traversed AST edge, even when multiple
+edges reference the same shared acyclic node. Evaluation charges every node
+visit. `maxArrayElements` and `maxCallArguments` reject oversized child arrays
+before individual entries are inspected. `maxRuntimeDepth` and
 `maxRuntimeEntries` limit supported environment and function-return graphs.
 None of these options interrupts host function work. String length and work
 inside standard string helpers are not metered by `maxSteps`.

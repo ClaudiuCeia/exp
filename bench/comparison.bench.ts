@@ -50,6 +50,21 @@ const runtimeMember16x1k = runtimeMemberWorkload(16, 1_000);
 const runtimeMembers10k: Env = {
   record: Array.from({ length: 10_000 }, (_, index) => index),
 };
+const aliasedArgument: Expr = {
+  kind: "number",
+  value: 1,
+  span: { start: 3, end: 4 },
+};
+const aliasedArguments100k: Expr = {
+  kind: "call",
+  callee: {
+    kind: "identifier",
+    name: "fn",
+    span: { start: 0, end: 2 },
+  },
+  args: Array<Expr>(100_000).fill(aliasedArgument),
+  span: { start: 0, end: 5 },
+};
 let sink: unknown;
 
 function rejectNestedInput(
@@ -166,6 +181,23 @@ const cases = [
         throw new Error("complex AST evaluation returned the wrong result");
       }
       sink = result.value;
+    },
+  },
+  {
+    name: "evaluate-ast/reject-aliased-arguments-100000-at-1-step",
+    execute: () => {
+      const result = evaluateAst(aliasedArguments100k, {
+        throwOnError: false,
+        maxCallArguments: 100_000,
+        maxSteps: 1,
+      });
+      if (
+        result.success ||
+        result.error.steps !== 2
+      ) {
+        throw new Error("aliased arguments returned an unexpected result");
+      }
+      sink = result.error.steps;
     },
   },
   {
