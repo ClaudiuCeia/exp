@@ -36,7 +36,7 @@ export type ParseOptions = Readonly<{
   throwOnError?: boolean;
   /** Maximum input length in UTF-16 code units. Default: 100,000. */
   maxInputLength?: number;
-  /** Maximum recursive syntax nesting. Default: 64. */
+  /** Maximum recursive syntax nesting outside strings and comments. Default: 64. */
   maxNestingDepth?: number;
   /** Maximum number of nodes in the parsed AST. Default: 10,000. */
   maxNodes?: number;
@@ -439,16 +439,19 @@ const checkNesting = (
   input: string,
   maxNestingDepth: number,
 ): ParseError | null => {
-  const frames: Array<{ delimiter: "(" | "[" | null; conditionals: number }> = [
-    { delimiter: null, conditionals: 0 },
-  ];
-  let quote: "'" | '"' | null = null;
+  type Frame =
+    | Readonly<{ delimiter: null; conditionals: number }>
+    | Readonly<{
+        delimiter: "(" | "[";
+        conditionals: number;
+        parent: Frame;
+      }>;
 
-  const depth = () => {
-    let conditionals = 0;
-    for (const frame of frames) conditionals += frame.conditionals;
-    return frames.length - 1 + conditionals;
-  };
+  let frame: Frame = { delimiter: null, conditionals: 0 };
+  let depth = 0;
+  let quote: "'" | '"' | null = null;
+  let inLineComment = false;
+  let inBlockComment = false;
 
   for (let i = 0; i < input.length; i++) {
     const ch = input[i];
@@ -459,27 +462,56 @@ const checkNesting = (
       continue;
     }
 
+    if (inLineComment) {
+      if (ch === "\n") inLineComment = false;
+      continue;
+    }
+
+    if (inBlockComment) {
+      if (ch === "*" && input[i + 1] === "/") {
+        inBlockComment = false;
+        i++;
+      }
+      continue;
+    }
+
+    if (ch === "/" && input[i + 1] === "/") {
+      inLineComment = true;
+      i++;
+      continue;
+    }
+
+    if (ch === "/" && input[i + 1] === "*") {
+      inBlockComment = true;
+      i++;
+      continue;
+    }
+
     if (ch === "'" || ch === '"') {
       quote = ch;
       continue;
     }
 
     if (ch === "(" || ch === "[") {
-      frames.push({ delimiter: ch, conditionals: 0 });
-    } else if (
-      (ch === ")" && frames[frames.length - 1].delimiter === "(") ||
-      (ch === "]" && frames[frames.length - 1].delimiter === "[")
-    ) {
-      frames.pop();
+      frame = { delimiter: ch, conditionals: 0, parent: frame };
+      depth++;
+    } else if (ch === ")" && frame.delimiter === "(") {
+      depth -= frame.conditionals + 1;
+      frame = frame.parent;
+    } else if (ch === "]" && frame.delimiter === "[") {
+      depth -= frame.conditionals + 1;
+      frame = frame.parent;
     } else if (ch === ",") {
-      frames[frames.length - 1].conditionals = 0;
+      depth -= frame.conditionals;
+      frame = { ...frame, conditionals: 0 };
     } else if (ch === "?" && input[i + 1] !== "?") {
-      frames[frames.length - 1].conditionals++;
+      depth++;
+      frame = { ...frame, conditionals: frame.conditionals + 1 };
     } else if (ch === "?" && input[i + 1] === "?") {
       i++;
     }
 
-    if (depth() > maxNestingDepth) {
+    if (depth > maxNestingDepth) {
       return { message: "parse nesting limit exceeded", index: i };
     }
   }
