@@ -92,8 +92,18 @@ jobs:
         run: |
           node --input-type=module <<'JS'
           import { evaluateExpression } from "@claudiu-ceia/exp";
-          const result = evaluateExpression("1 + 2");
-          if (!result.success || result.value !== 3) process.exit(1);
+          const result = evaluateExpression(
+            'account.plan == "pro" && usage.requests >= 1000',
+            {
+              env: {
+                account: { plan: "pro" },
+                usage: { requests: 1400 },
+              },
+              throwOnParseError: false,
+              throwOnError: false,
+            },
+          );
+          if (!result.success || result.value !== true) process.exit(1);
           JS
 
   publish-jsr:

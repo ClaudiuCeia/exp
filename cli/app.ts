@@ -28,7 +28,7 @@ const routes = buildRouteMap({
     repl: replCommand,
   },
   docs: {
-    brief: "Parse and safely evaluate expressions",
+    brief: "Parse and evaluate exp expressions",
   },
 });
 
