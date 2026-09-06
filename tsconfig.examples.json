@@ -3,5 +3,6 @@
   "compilerOptions": {
     "noEmit": true
   },
-  "include": ["examples/**/*.ts"]
+  "include": ["examples/**/*.ts", "scripts/check_metadata.ts"],
+  "exclude": []
 }
