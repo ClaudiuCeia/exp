@@ -756,7 +756,10 @@ export type EvaluateExpressionOptions = EvalOptions &
     maxInputLength?: number;
     /** Maximum recursive parser syntax nesting. Default: 64. */
     maxNestingDepth?: number;
-    /** Maximum number of nodes in the parsed AST. Default: 10,000. */
+    /**
+     * Maximum AST node allocations during parsing, including transient nodes.
+     * Default: 10,000.
+     */
     maxNodes?: number;
   }>;
 
