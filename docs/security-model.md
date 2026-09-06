@@ -52,8 +52,13 @@ after the function returns. A Promise return is unsupported, but the function
 has already run by the time that return is rejected.
 
 Errors thrown by an environment function are converted into evaluation
-failures. Converting an error does not undo side effects performed before it was
-thrown.
+failures. Thrown `undefined`, `null`, booleans, numbers, bigints, strings, and own
+string `message` data properties are reported directly. Symbols and other
+objects are reported as `unknown thrown value` without invoking accessors or
+coercion hooks. Preserved native error messages are host/runtime supplied and can
+differ across JavaScript runtimes. Exceptions from defensive AST and environment
+inspection or setup use stable package-defined messages. Converting an error
+does not undo side effects performed before it was thrown.
 
 Expose narrow, synchronous, bounded functions. Prefer functions without side
 effects when expressions come from users or stored configuration.

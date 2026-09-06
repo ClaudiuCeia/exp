@@ -448,7 +448,13 @@ formatDiagnosticReport(input, error)
 
 Parsing throws by default. `parseExpression()` uses `throwOnError`, while
 `evaluateExpression()` uses separate `throwOnParseError` and `throwOnError`
-controls. `throwOnError: false` does not cover parser failures.
+controls. `throwOnError: false` converts evaluation exceptions into failures,
+including exceptions from environment functions and defensive data inspection.
+Thrown objects are not coerced; an object without an own string `message` data
+property is reported as `unknown thrown value`. Native messages preserved from
+environment functions may vary across JavaScript runtimes. Defensive AST and
+environment inspection and setup failures use package-defined messages. This
+option does not cover parser failures.
 
 Use the [generated JSR API reference](https://jsr.io/@claudiu-ceia/exp/doc) for
 complete option types, result unions, AST variants, runtime value types,

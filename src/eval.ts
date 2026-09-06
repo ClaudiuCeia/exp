@@ -1,4 +1,5 @@
 import type { Expr, Span } from "./ast/mod.ts";
+import { describeThrownValue } from "./error.ts";
 import { parseExpression } from "./parse.ts";
 
 import {
@@ -410,49 +411,48 @@ const evalConditionalExpr = (expr: ConditionalExpr, ctx: Ctx): EvalResult => {
 };
 
 const evalExpr = (expr: Expr, ctx: Ctx): EvalResult => {
-  const budget = bump(ctx, expr.span);
-  if (budget) return budget;
-
-  if (ctx.depth > ctx.maxDepth) {
-    return evalError(
-      "evaluation recursion limit exceeded",
-      expr.span,
-      ctx.steps,
-    );
-  }
-
-  ctx.depth++;
+  let span: Span | undefined;
   try {
-    switch (expr.kind) {
-      case "number":
-      case "string":
-      case "boolean":
-        return { success: true, value: expr.value };
-      case "null":
-        return { success: true, value: null };
-      case "undefined":
-        return evalUndefinedExpr(expr, ctx);
-      case "identifier":
-        return evalIdentifierExpr(expr, ctx);
-      case "array":
-        return evalArrayExpr(expr, ctx);
-      case "unary":
-        return evalUnaryExpr(expr, ctx);
-      case "binary":
-        return evalBinaryExpr(expr, ctx);
-      case "member":
-        return evalMemberExpr(expr, ctx);
-      case "call": {
-        return evalCallExpr(expr, ctx);
-      }
-      case "conditional":
-        return evalConditionalExpr(expr, ctx);
+    span = expr.span;
+    const budget = bump(ctx, span);
+    if (budget) return budget;
+
+    if (ctx.depth > ctx.maxDepth) {
+      return evalError("evaluation recursion limit exceeded", span, ctx.steps);
     }
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return evalError(msg, expr.span, ctx.steps);
-  } finally {
-    ctx.depth--;
+
+    ctx.depth++;
+    try {
+      switch (expr.kind) {
+        case "number":
+        case "string":
+        case "boolean":
+          return { success: true, value: expr.value };
+        case "null":
+          return { success: true, value: null };
+        case "undefined":
+          return evalUndefinedExpr(expr, ctx);
+        case "identifier":
+          return evalIdentifierExpr(expr, ctx);
+        case "array":
+          return evalArrayExpr(expr, ctx);
+        case "unary":
+          return evalUnaryExpr(expr, ctx);
+        case "binary":
+          return evalBinaryExpr(expr, ctx);
+        case "member":
+          return evalMemberExpr(expr, ctx);
+        case "call":
+          return evalCallExpr(expr, ctx);
+        case "conditional":
+          return evalConditionalExpr(expr, ctx);
+      }
+      return evalError("unknown expression kind", span, ctx.steps);
+    } finally {
+      ctx.depth--;
+    }
+  } catch (error) {
+    return evalError(describeThrownValue(error), span, ctx.steps);
   }
 };
 
@@ -763,10 +763,8 @@ const validateAst = (
         }
         if (!result.ok) return result;
       }
-    } catch (error) {
-      return astValidationError(
-        error instanceof Error ? error.message : String(error),
-      );
+    } catch {
+      return astValidationError("inspection failed");
     }
 
     return { ok: true };
@@ -844,45 +842,49 @@ export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
     return { success: false, error: e };
   }
 
-  if (Object.hasOwn(envRes.env, "std")) {
-    const e: EvalError = {
-      message: "env['std'] is reserved (stdlib is always available as std.*)",
-      steps: 0,
-    };
-    if (throwOnError) throw new ExpEvalError(e);
-    return { success: false, error: e };
+  let res: EvalResult;
+  try {
+    if (Object.hasOwn(envRes.env, "std")) {
+      res = evalError(
+        "env['std'] is reserved (stdlib is always available as std.*)",
+        undefined,
+        0,
+      );
+    } else {
+      const env = Object.create(null) as Record<string, RuntimeValue>;
+      Object.defineProperty(env, "std", {
+        value: std,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+      for (const [k, v] of Object.entries(envRes.env)) {
+        Object.defineProperty(env, k, {
+          value: v,
+          enumerable: true,
+          writable: true,
+          configurable: true,
+        });
+      }
+
+      const ctx: Ctx = {
+        env,
+        steps: 0,
+        maxSteps,
+        depth: 0,
+        maxDepth,
+        maxArrayElements,
+        maxCallArguments,
+        maxRuntimeDepth,
+        maxRuntimeEntries,
+        unknownIdentifier: opts.unknownIdentifier ?? "error",
+      };
+      res = evalExpr(expr, ctx);
+    }
+  } catch {
+    res = evalError("evaluation setup failed", undefined, 0);
   }
 
-  const env = Object.create(null) as Record<string, RuntimeValue>;
-  Object.defineProperty(env, "std", {
-    value: std,
-    enumerable: true,
-    writable: true,
-    configurable: true,
-  });
-  for (const [k, v] of Object.entries(envRes.env)) {
-    Object.defineProperty(env, k, {
-      value: v,
-      enumerable: true,
-      writable: true,
-      configurable: true,
-    });
-  }
-
-  const ctx: Ctx = {
-    env,
-    steps: 0,
-    maxSteps,
-    depth: 0,
-    maxDepth,
-    maxArrayElements,
-    maxCallArguments,
-    maxRuntimeDepth,
-    maxRuntimeEntries,
-    unknownIdentifier: opts.unknownIdentifier ?? "error",
-  };
-
-  const res = evalExpr(expr, ctx);
   if (res.success) return res;
   if (throwOnError) throw new ExpEvalError(res.error);
   return res;
