@@ -191,7 +191,10 @@ const cases = [
         maxCallArguments: 100_000,
         maxSteps: 1,
       });
-      if (result.success || result.error.steps !== 2) {
+      if (
+        result.success ||
+        result.error.message !== "invalid AST: validation budget exceeded"
+      ) {
         throw new Error("aliased arguments returned an unexpected result");
       }
       sink = result.error.steps;
