@@ -2,71 +2,128 @@ import { bench, group, run } from "mitata";
 import type { Expr } from "../src/ast/mod.ts";
 import { evaluateAst, evaluateExpression } from "../src/eval.ts";
 import { parseExpression } from "../src/parse.ts";
+import type { Env } from "../src/runtime.ts";
+import {
+  COMPLEX_ENV,
+  COMPLEX_EXPRESSION,
+  mustParse,
+  SIMPLE_ENV,
+  SIMPLE_EXPRESSION,
+} from "./fixtures.ts";
 
-const SIMPLE = "status == 'open' && priority >= 3";
-const COMPLEX = `(
-  user.isInternal == true
-  || std.includes(allowlist, user.id)
-  || (
-    (user.plan ?? "free") != "free"
-    && user.status == "active"
-    && !std.includes(blockedEmails, std.lower(user.email ?? ""))
-    && (user.age ?? 0) >= 18
-    && (
-      std.clamp((user.rolloutBucket ?? 0), 0, 99) < rolloutPercent
-      || std.includes(forcedBuckets, user.rolloutBucket ?? -1)
-    )
-  )
-)
-&& !std.includes(bannedCountries, user.country ?? "XX")`;
-
-const simpleEnv = { status: "open", priority: 4 };
-const complexEnv = {
-  user: {
-    id: "u_123",
-    email: "Ada@example.com",
-    plan: "pro",
-    status: "active",
-    country: "US",
-    age: 29,
-    rolloutBucket: 17,
-    isInternal: false,
-  },
-  allowlist: ["u_999"],
-  blockedEmails: ["bad@example.com", "test@example.com"],
-  forcedBuckets: [42, 77],
-  bannedCountries: ["CN", "RU"],
-  rolloutPercent: 25,
-};
-
-function mustParse(input: string): Expr {
-  const result = parseExpression(input, { throwOnError: false });
-  if (!result.success) throw new Error(result.error.message);
-  return result.value;
+function nestedPreflightInput(depth: number): string {
+  return "@" + "(".repeat(depth) + ")".repeat(depth);
 }
 
-const simpleAst = mustParse(SIMPLE);
-const complexAst = mustParse(COMPLEX);
+type RuntimeMemberWorkload = Readonly<{
+  ast: Expr;
+  env: Env;
+  expected: number;
+}>;
+
+function runtimeMemberWorkload(
+  reads: number,
+  entries: number,
+): RuntimeMemberWorkload {
+  const member = "root.subgraph.values.length";
+  return {
+    ast: mustParse(Array.from({ length: reads }, () => member).join(" + ")),
+    env: {
+      root: {
+        subgraph: {
+          values: Array.from({ length: entries }, (_, index) => index),
+        },
+      },
+    },
+    expected: reads * entries,
+  };
+}
+
+const simpleAst = mustParse(SIMPLE_EXPRESSION);
+const complexAst = mustParse(COMPLEX_EXPRESSION);
+const nesting256 = nestedPreflightInput(256);
+const nesting1k = nestedPreflightInput(1_024);
+const nesting4k = nestedPreflightInput(4_096);
+const runtimeMember4x250 = runtimeMemberWorkload(4, 250);
+const runtimeMember16x1k = runtimeMemberWorkload(16, 1_000);
+const runtimeMembers10k: Env = {
+  record: Array.from({ length: 10_000 }, (_, index) => index),
+};
 let sink: unknown;
+
+function rejectNestedInput(
+  input: string,
+  maxNestingDepth: number,
+  expectedMessage: string,
+  expectedIndex: number,
+): void {
+  const result = parseExpression(input, {
+    throwOnError: false,
+    maxInputLength: input.length,
+    maxNestingDepth,
+  });
+  if (
+    result.success ||
+    result.error.message !== expectedMessage ||
+    result.error.index !== expectedIndex
+  ) {
+    throw new Error("nested input returned an unexpected parse result");
+  }
+  sink = result.error.index;
+}
+
+function evaluateRuntimeMembers(workload: RuntimeMemberWorkload): void {
+  const result = evaluateAst(workload.ast, {
+    env: workload.env,
+    throwOnError: true,
+  });
+  if (!result.success || result.value !== workload.expected) {
+    throw new Error("runtime member evaluation returned the wrong result");
+  }
+  sink = result.value;
+}
 
 const cases = [
   {
     name: "parse/simple",
     execute: () => {
-      sink = mustParse(SIMPLE);
+      sink = mustParse(SIMPLE_EXPRESSION);
     },
   },
   {
     name: "parse/complex",
     execute: () => {
-      sink = mustParse(COMPLEX);
+      sink = mustParse(COMPLEX_EXPRESSION);
+    },
+  },
+  {
+    name: "parse/nesting-preflight-256",
+    execute: () => {
+      rejectNestedInput(nesting256, 256, "expected expression at 1:1", 0);
+    },
+  },
+  {
+    name: "parse/nesting-preflight-1024",
+    execute: () => {
+      rejectNestedInput(nesting1k, 1_024, "expected expression at 1:1", 0);
+    },
+  },
+  {
+    name: "parse/reject-nesting-4096-at-1024",
+    execute: () => {
+      rejectNestedInput(
+        nesting4k,
+        1_024,
+        "parse nesting limit exceeded",
+        1_025,
+      );
     },
   },
   {
     name: "evaluate-ast/simple",
     execute: () => {
       const result = evaluateAst(simpleAst, {
-        env: simpleEnv,
+        env: SIMPLE_ENV,
         throwOnError: true,
       });
       if (!result.success || result.value !== true) {
@@ -79,7 +136,7 @@ const cases = [
     name: "evaluate-ast/complex",
     execute: () => {
       const result = evaluateAst(complexAst, {
-        env: complexEnv,
+        env: COMPLEX_ENV,
         throwOnError: true,
       });
       if (!result.success || result.value !== true) {
@@ -91,8 +148,8 @@ const cases = [
   {
     name: "evaluate-expression/simple",
     execute: () => {
-      const result = evaluateExpression(SIMPLE, {
-        env: simpleEnv,
+      const result = evaluateExpression(SIMPLE_EXPRESSION, {
+        env: SIMPLE_ENV,
         throwOnError: true,
       });
       if (!result.success || result.value !== true) {
@@ -104,14 +161,42 @@ const cases = [
   {
     name: "evaluate-expression/complex",
     execute: () => {
-      const result = evaluateExpression(COMPLEX, {
-        env: complexEnv,
+      const result = evaluateExpression(COMPLEX_EXPRESSION, {
+        env: COMPLEX_ENV,
         throwOnError: true,
       });
       if (!result.success || result.value !== true) {
         throw new Error("complex expression returned the wrong result");
       }
       sink = result.value;
+    },
+  },
+  {
+    name: "evaluate-ast/runtime-member-revalidation-4x250",
+    execute: () => {
+      evaluateRuntimeMembers(runtimeMember4x250);
+    },
+  },
+  {
+    name: "evaluate-ast/runtime-member-revalidation-16x1000",
+    execute: () => {
+      evaluateRuntimeMembers(runtimeMember16x1k);
+    },
+  },
+  {
+    name: "evaluate-ast/reject-runtime-members-10000",
+    execute: () => {
+      const result = evaluateAst(simpleAst, {
+        env: runtimeMembers10k,
+        throwOnError: false,
+      });
+      if (
+        result.success ||
+        result.error.message !== "env['record'] exceeds the runtime entry limit"
+      ) {
+        throw new Error("oversized runtime members were not rejected");
+      }
+      sink = result.error.steps;
     },
   },
 ] as const;

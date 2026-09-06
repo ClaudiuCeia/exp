@@ -194,16 +194,14 @@ jobs:
         with:
           bun-version: 1.4.0
 
-      - name: Pin comparison tooling to baseline
+      - name: Use candidate benchmark definition
         shell: bash
         run: |
           if [[ ! -f baseline/package.json ]]; then
             cp current/package.json current/bun.lock baseline/
-            cp current/bench/comparison.bench.ts baseline/bench/
-          else
-            cp baseline/bench/comparison.bench.ts current/bench/
-            cp baseline/scripts/benchmark-report.ts current/scripts/
           fi
+          mkdir -p baseline/bench
+          cp current/bench/comparison.bench.ts current/bench/fixtures.ts baseline/bench/
 
       - name: Install head dependencies
         working-directory: current
@@ -213,11 +211,11 @@ jobs:
         working-directory: baseline
         run: bun install --frozen-lockfile
 
-      - name: Pin benchmark runner to baseline
+      - name: Pin benchmark runner to candidate
         shell: bash
         run: |
-          rm -rf current/node_modules/mitata
-          cp -R baseline/node_modules/mitata current/node_modules/mitata
+          rm -rf baseline/node_modules/mitata
+          cp -R current/node_modules/mitata baseline/node_modules/mitata
 
       - name: Compare benchmark performance
         id: performance
