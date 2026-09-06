@@ -28,6 +28,15 @@ const containerSetAdd = (set: WeakSet<object>, container: object): void => {
   reflectApply(weakSetAdd, set, [container]);
 };
 
+/**
+ * A candidate environment supplied for runtime validation and normalization.
+ *
+ * The top level must be a plain or null-prototype object at runtime. Its values
+ * are checked recursively before evaluation, so type acceptance alone does not
+ * guarantee that an input is supported.
+ */
+export type EnvironmentInput = object;
+
 /** Options for `evaluateAst` and `evaluateExpression`. */
 export type EvalOptions = Readonly<{
   /**
@@ -35,13 +44,9 @@ export type EvalOptions = Readonly<{
    *
    * Identifiers resolve as `env[name]`.
    *
-   * Recommended shapes:
-   * - primitives (`undefined | null | boolean | number | string`)
-   * - arrays of supported values
-   * - plain objects (`{...}`) of supported values
-   * - functions that accept/return supported values
+   * The input is validated and normalized before each evaluation.
    */
-  env?: Record<string, RuntimeValue>;
+  env?: EnvironmentInput | undefined;
 
   /**
    * Max AST traversal work during validation and, separately, max nodes visited

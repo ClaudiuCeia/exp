@@ -292,6 +292,13 @@ guidance are documented under [Persisted expressions](#persisted-expressions).
 evaluator normalizes supported data into arrays and prototype-free plain
 objects before evaluation.
 
+The public `EnvironmentInput` type accepts application-owned object types,
+including named interfaces, readonly properties, and readonly arrays. It is a
+candidate input type rather than a static guarantee: the evaluator still
+validates the top-level object and every exposed value at runtime. Input arrays
+and plain objects are copied during normalization, so frozen inputs are
+supported and caller-owned data is not mutated.
+
 Supported runtime values are:
 
 ```text
@@ -346,12 +353,17 @@ std.slice
 The built-in `std` functions are deterministic, side-effect-free, and frozen
 together with their namespace. `env.std` is reserved.
 
-An expression can call functions supplied in `env`. Those functions run with
-the same authority as the application and may access values captured by their
-closure.
+An expression can call functions supplied in `env`. Those functions are retained
+as trusted host functions rather than copied. They run with the same authority
+as the application and may access values captured by their closure. Their return
+values are validated after every call.
 
 Expose narrow, synchronous, bounded functions. Prefer functions without side
 effects when expressions come from users or stored configuration.
+
+Expressions are dynamically typed, so a narrow TypeScript parameter annotation
+does not prevent an expression from passing a different supported value. Host
+functions must validate arguments when a mismatch matters.
 
 ```ts
 const env = {

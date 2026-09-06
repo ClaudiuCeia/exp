@@ -21,6 +21,8 @@ count can exceed the number of nodes reachable from a successful result.
 
 The top-level environment must be a plain object or an object with a null
 prototype. The evaluator normalizes arrays and plain objects before evaluation.
+The `EnvironmentInput` TypeScript type describes a candidate object, not proof
+that its runtime shape or values are supported.
 
 - Only own enumerable string-keyed data properties are copied and readable.
 - Inherited properties are not exposed.
@@ -50,6 +52,9 @@ Environment functions can:
 Function work is not counted by `maxSteps`. Return values are validated only
 after the function returns. A Promise return is unsupported, but the function
 has already run by the time that return is rejected.
+
+TypeScript parameter annotations on host functions do not constrain expression
+arguments. A host function that requires narrower values must validate them.
 
 Errors thrown by an environment function are converted into evaluation
 failures. Thrown `undefined`, `null`, booleans, numbers, bigints, strings, and own

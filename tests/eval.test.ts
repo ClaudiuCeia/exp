@@ -1,5 +1,6 @@
 import { test } from "bun:test";
 import { assertEquals, assertMatch, assertThrows } from "./assert.ts";
+import type { EnvironmentInput, EvalOptions } from "../mod.ts";
 import type { Expr } from "../src/ast/mod.ts";
 import { evaluateAst, evaluateExpression, ExpEvalError } from "../src/eval.ts";
 import { isPlainObject, type RuntimeValue } from "../src/runtime.ts";
@@ -478,12 +479,56 @@ test("evaluateExpression reports primitive function exceptions deterministically
   }
 });
 
+test("evaluateExpression accepts readonly application environment types", () => {
+  interface Profile {
+    readonly name: string;
+  }
+
+  interface ApplicationEnvironment {
+    readonly profile: Profile;
+    readonly values: readonly [1, 2, 3];
+    readonly twice: (value: number) => number;
+    readonly singleton: (value: number) => readonly [number];
+  }
+
+  const typeContract: Readonly<{
+    namedObject: ApplicationEnvironment extends EnvironmentInput ? true : false;
+    string: string extends EnvironmentInput ? true : false;
+    undefined: undefined extends EnvironmentInput ? true : false;
+  }> = {
+    namedObject: true,
+    string: false,
+    undefined: false,
+  };
+  const env: ApplicationEnvironment = Object.freeze({
+    profile: Object.freeze({ name: "Ada" }),
+    values: Object.freeze([1, 2, 3] as const),
+    twice: (value: number) => value * 2,
+    singleton: (value: number) => [value] as const,
+  });
+  const input: EnvironmentInput = env;
+  const options: EvalOptions = { env: input, throwOnError: false };
+
+  const res = evaluateExpression(
+    "profile.name + ':' + values.length + ':' + twice(4) + ':' + singleton(9).length",
+    options,
+  );
+
+  assertEquals(typeContract, {
+    namedObject: true,
+    string: false,
+    undefined: false,
+  });
+  assertEquals(res.success, true);
+  if (!res.success) return;
+  assertEquals(res.value, "Ada:3:8:1");
+});
+
 test("evaluateExpression rejects unsupported function return values", () => {
   const res = evaluateExpression("f()", {
     throwOnError: false,
     env: {
-      // Date is not an allowed runtime value.
-      f: () => ({ when: new Date() }) as unknown as RuntimeValue,
+      f: () => ({ when: new Date() }),
     },
   });
   assertEquals(res.success, false);
@@ -556,14 +601,14 @@ test("evaluateExpression rejects unsupported env values", () => {
   assertThrows(() => {
     evaluateExpression("x", {
       throwOnError: true,
-      env: { x: new Date() as unknown as RuntimeValue },
+      env: { x: new Date() },
       throwOnParseError: true,
     });
   });
 
   const res = evaluateExpression("x", {
     throwOnError: false,
-    env: { x: new Date() as unknown as RuntimeValue },
+    env: { x: new Date() },
     throwOnParseError: false,
   });
   assertEquals(res.success, false);
@@ -584,7 +629,7 @@ test("evaluateExpression rejects env accessor properties without invoking them",
 
   const res = evaluateExpression("x", {
     throwOnError: false,
-    env: env as unknown as Record<string, RuntimeValue>,
+    env,
   });
 
   assertEquals(res.success, false);
@@ -606,7 +651,7 @@ test("evaluateExpression rejects nested accessor properties without invoking the
 
   const res = evaluateExpression("user.plan", {
     throwOnError: false,
-    env: { user } as unknown as Record<string, RuntimeValue>,
+    env: { user },
   });
 
   assertEquals(res.success, false);
@@ -628,7 +673,7 @@ test("evaluateExpression rejects array index accessor properties without invokin
 
   const res = evaluateExpression("xs.length", {
     throwOnError: false,
-    env: { xs } as unknown as Record<string, RuntimeValue>,
+    env: { xs },
   });
 
   assertEquals(res.success, false);
@@ -692,7 +737,7 @@ test("evaluateExpression rejects accessors in cyclic environments", () => {
 
   const res = evaluateExpression("node.self", {
     throwOnError: false,
-    env: { node } as unknown as Record<string, RuntimeValue>,
+    env: { node },
   });
   assertEquals(res.success, false);
   assertEquals(called, 0);
