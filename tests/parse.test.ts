@@ -1,5 +1,10 @@
 import { test } from "bun:test";
-import { assertEquals, assertStringIncludes, assertThrows } from "./assert.ts";
+import {
+  assert,
+  assertEquals,
+  assertStringIncludes,
+  assertThrows,
+} from "./assert.ts";
 import { ExpParseError, parseExpression } from "../src/parse.ts";
 
 test("parseExpression parses numbers", () => {
@@ -268,6 +273,86 @@ test("parseExpression parses pipeline operator", () => {
   assertEquals(res.value.args[0].kind, "binary");
 });
 
+test("parseExpression builds pipelined calls immutably with exact spans", () => {
+  const res = parseExpression("source |> wrap(inner(1)) |> finish(2)", {
+    throwOnError: false,
+    maxNodes: 11,
+  });
+
+  assertEquals(res, {
+    success: true,
+    value: {
+      kind: "call",
+      callee: {
+        kind: "identifier",
+        name: "finish",
+        span: { start: 28, end: 34 },
+      },
+      args: [
+        {
+          kind: "call",
+          callee: {
+            kind: "identifier",
+            name: "wrap",
+            span: { start: 10, end: 14 },
+          },
+          args: [
+            {
+              kind: "identifier",
+              name: "source",
+              span: { start: 0, end: 6 },
+            },
+            {
+              kind: "call",
+              callee: {
+                kind: "identifier",
+                name: "inner",
+                span: { start: 15, end: 20 },
+              },
+              args: [
+                {
+                  kind: "number",
+                  value: 1,
+                  span: { start: 21, end: 22 },
+                },
+              ],
+              span: { start: 15, end: 23 },
+            },
+          ],
+          span: { start: 0, end: 24 },
+        },
+        {
+          kind: "number",
+          value: 2,
+          span: { start: 35, end: 36 },
+        },
+      ],
+      span: { start: 0, end: 37 },
+    },
+  });
+
+  if (!res.success || res.value.kind !== "call") return;
+  const piped = res.value.args[0];
+  if (piped.kind !== "call") return;
+  const nested = piped.args[1];
+  if (nested.kind !== "call") return;
+  assert(res.value.args !== piped.args);
+  assert(res.value.args !== nested.args);
+  assert(piped.args !== nested.args);
+});
+
+test("parseExpression charges immutable pipeline call replacements", () => {
+  const res = parseExpression("source |> wrap(inner(1)) |> finish(2)", {
+    throwOnError: false,
+    maxNodes: 10,
+  });
+
+  assertEquals(res, {
+    success: false,
+    error: { message: "AST node limit exceeded", index: 0 },
+  });
+});
+
 test("parseExpression fails on empty", () => {
   const res = parseExpression("   ", { throwOnError: false });
   assertEquals(res.success, false);
@@ -513,14 +598,150 @@ test("parseExpression enforces the exact nesting boundary and error index", () =
   });
 });
 
-test("parseExpression enforces AST node limits", () => {
-  const res = parseExpression("1 + 2", {
+test("parseExpression enforces exact AST construction boundaries", () => {
+  const cases = [
+    { input: "42", starts: [0] },
+    { input: "'value'", starts: [0] },
+    { input: "true", starts: [0] },
+    { input: "false", starts: [0] },
+    { input: "null", starts: [0] },
+    { input: "undefined", starts: [0] },
+    { input: "1 + 2 + 3", starts: [0, 4, 0, 8, 0] },
+    { input: "!!!a", starts: [3, 2, 1, 0] },
+    { input: "[1, 2, 3]", starts: [1, 4, 7, 0] },
+    { input: "f(1, 2)", starts: [0, 2, 5, 0] },
+    {
+      input: "1 |> f(2) |> g",
+      starts: [0, 5, 7, 5, 13, 0, 0],
+    },
+    { input: "a.b.c", starts: [0, 0, 0] },
+    { input: "a ? b : c", starts: [0, 4, 8, 0] },
+  ];
+
+  for (const { input, starts } of cases) {
+    const expected = parseExpression(input, { throwOnError: false });
+    assertEquals(expected.success, true);
+
+    const zero = parseExpression(input, {
+      throwOnError: false,
+      maxNodes: 0,
+    });
+    assertEquals(zero, {
+      success: false,
+      error: { message: "AST node limit exceeded", index: starts[0] },
+    });
+
+    const one = parseExpression(input, {
+      throwOnError: false,
+      maxNodes: 1,
+    });
+    if (starts.length === 1) {
+      assertEquals(one, expected);
+    } else {
+      assertEquals(one, {
+        success: false,
+        error: { message: "AST node limit exceeded", index: starts[1] },
+      });
+    }
+
+    const exact = parseExpression(input, {
+      throwOnError: false,
+      maxNodes: starts.length,
+    });
+    assertEquals(exact, expected);
+
+    const oneOverLimit = parseExpression(input, {
+      throwOnError: false,
+      maxNodes: starts.length - 1,
+    });
+    assertEquals(oneOverLimit, {
+      success: false,
+      error: {
+        message: "AST node limit exceeded",
+        index: starts[starts.length - 1],
+      },
+    });
+  }
+});
+
+test("parseExpression preserves malformed-expression failures near exhaustion", () => {
+  const cases = [
+    {
+      input: "(",
+      maxNodes: 0,
+      error: { message: "expected expression at 1:2", index: 1 },
+    },
+    {
+      input: "'unterminated",
+      maxNodes: 0,
+      error: { message: "expected ' at 1:14", index: 13 },
+    },
+    {
+      input: "1 +",
+      maxNodes: 1,
+      error: { message: "expected expression at 1:4", index: 3 },
+    },
+    {
+      input: "[1,]",
+      maxNodes: 1,
+      error: { message: "expected expression at 1:4", index: 3 },
+    },
+    {
+      input: "f(1,)",
+      maxNodes: 2,
+      error: { message: "expected eof not reached at 1:2", index: 1 },
+    },
+    {
+      input: "f(",
+      maxNodes: 1,
+      error: { message: "expected closing ')' at 1:3", index: 2 },
+    },
+    {
+      input: "(1",
+      maxNodes: 1,
+      error: { message: "expected ) at 1:3", index: 2 },
+    },
+    {
+      input: "[1",
+      maxNodes: 1,
+      error: { message: "expected ] at 1:3", index: 2 },
+    },
+    {
+      input: "a ? b :",
+      maxNodes: 2,
+      error: { message: "expected expression after ':' at 1:8", index: 7 },
+    },
+  ];
+
+  for (const { input, maxNodes, error } of cases) {
+    assertEquals(parseExpression(input, { throwOnError: false, maxNodes }), {
+      success: false,
+      error,
+    });
+  }
+});
+
+test("parseExpression stops at the first over-budget node", () => {
+  const res = parseExpression("1 + 2 + (", {
     throwOnError: false,
-    maxNodes: 2,
+    maxNodes: 1,
   });
-  assertEquals(res.success, false);
-  if (res.success) return;
-  assertStringIncludes(res.error.message, "AST node limit");
+  assertEquals(res, {
+    success: false,
+    error: { message: "AST node limit exceeded", index: 4 },
+  });
+});
+
+test("parseExpression throws its public error for node exhaustion", () => {
+  try {
+    parseExpression("1", { maxNodes: 0 });
+    throw new Error("expected parseExpression to throw");
+  } catch (error) {
+    assertEquals(error instanceof ExpParseError, true);
+    if (!(error instanceof ExpParseError)) return;
+    assertEquals(error.message, "AST node limit exceeded");
+    assertEquals(error.index, 0);
+  }
 });
 
 test("parseExpression validates resource limit options", () => {

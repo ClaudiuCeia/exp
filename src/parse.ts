@@ -38,7 +38,7 @@ export type ParseOptions = Readonly<{
   maxInputLength?: number;
   /** Maximum recursive syntax nesting outside strings and comments. Default: 64. */
   maxNestingDepth?: number;
-  /** Maximum number of nodes in the parsed AST. Default: 10,000. */
+  /** Maximum AST node allocations during parsing, including transient nodes. Default: 10,000. */
   maxNodes?: number;
 }>;
 
@@ -161,259 +161,309 @@ type ExprLang = Readonly<{
   File: Expr;
 }>;
 
-const ExpressionLang = defineLanguage<ExprLang>({
-  Expression: (s) => s.Conditional,
+class AstNodeBudgetExceeded extends Error {
+  readonly index: number;
 
-  Conditional: (s) => {
-    const q = lx.symbol("?");
-    const colon = lx.symbol(":");
-    return map(
-      seq(
-        s.Pipeline,
-        optional(
-          seq(
-            q,
-            cut(s.Expression, "expression after '?'"),
-            cut(colon, "':' in conditional expression"),
-            cut(s.Expression, "expression after ':'"),
+  constructor(index: number) {
+    super("AST node limit exceeded");
+    this.name = "AstNodeBudgetExceeded";
+    this.index = index;
+  }
+}
+
+class AstNodeBudget {
+  #remaining: number;
+
+  constructor(maxNodes: number) {
+    this.#remaining = maxNodes;
+  }
+
+  consume(index: number): void {
+    if (this.#remaining === 0) throw new AstNodeBudgetExceeded(index);
+    this.#remaining--;
+  }
+}
+
+const createExpressionLanguage = (budget: AstNodeBudget) =>
+  defineLanguage<ExprLang>({
+    Expression: (s) => s.Conditional,
+
+    Conditional: (s) => {
+      const q = lx.symbol("?");
+      const colon = lx.symbol(":");
+      return map(
+        seq(
+          s.Pipeline,
+          optional(
+            seq(
+              q,
+              cut(s.Expression, "expression after '?'"),
+              cut(colon, "':' in conditional expression"),
+              cut(s.Expression, "expression after ':'"),
+            ),
           ),
         ),
-      ),
-      ([test, rest]) => {
-        if (!rest) return test;
-        const [, consequent, , alternate] = rest;
-        return {
-          kind: "conditional",
-          test,
-          consequent,
-          alternate,
-          span: { start: test.span.start, end: alternate.span.end },
-        };
-      },
-    );
-  },
+        ([test, rest]) => {
+          if (!rest) return test;
+          const [, consequent, , alternate] = rest;
+          budget.consume(test.span.start);
+          return {
+            kind: "conditional",
+            test,
+            consequent,
+            alternate,
+            span: { start: test.span.start, end: alternate.span.end },
+          };
+        },
+      );
+    },
 
-  Pipeline: (s) => {
-    const op = lx.symbol("|>");
+    Pipeline: (s) => {
+      const op = lx.symbol("|>");
 
-    const mkPipedCall = (start: number, rhs: Expr, lhs: Expr): Expr => {
-      if (rhs.kind === "call") {
+      const mkPipedCall = (start: number, rhs: Expr, lhs: Expr): Expr => {
+        if (rhs.kind === "call") {
+          budget.consume(start);
+          return {
+            kind: "call",
+            callee: rhs.callee,
+            args: [lhs, ...rhs.args],
+            span: { start, end: rhs.span.end },
+          };
+        }
+
+        budget.consume(start);
         return {
           kind: "call",
-          callee: rhs.callee,
-          args: [lhs, ...rhs.args],
+          callee: rhs,
+          args: [lhs],
           span: { start, end: rhs.span.end },
         };
-      }
-
-      return {
-        kind: "call",
-        callee: rhs,
-        args: [lhs],
-        span: { start, end: rhs.span.end },
       };
-    };
 
-    return map(
-      seq(s.LogicalOr, many(seq(op, cut(s.Postfix, "expression after '|>'")))),
-      ([first, rest]) => {
-        return rest.reduce(
-          (acc, [, rhs]) => mkPipedCall(acc.span.start, rhs, acc),
-          first,
-        );
-      },
-    );
-  },
+      return map(
+        seq(
+          s.LogicalOr,
+          many(seq(op, cut(s.Postfix, "expression after '|>'"))),
+        ),
+        ([first, rest]) => {
+          return rest.reduce(
+            (acc, [, rhs]) => mkPipedCall(acc.span.start, rhs, acc),
+            first,
+          );
+        },
+      );
+    },
 
-  LogicalOr: (s) => {
-    const op = any(lx.symbol("||"), lx.symbol("??"));
-    return chainl1(s.LogicalAnd, op, (l, o, r) =>
-      mkBinary(l, o as BinaryOp, r),
-    );
-  },
+    LogicalOr: (s) => {
+      const op = any(lx.symbol("||"), lx.symbol("??"));
+      return chainl1(s.LogicalAnd, op, (l, o, r) => {
+        budget.consume(l.span.start);
+        return mkBinary(l, o as BinaryOp, r);
+      });
+    },
 
-  LogicalAnd: (s) => {
-    const op = lx.symbol("&&");
-    return chainl1(s.Equality, op, (l, _op, r) => mkBinary(l, "&&", r));
-  },
+    LogicalAnd: (s) => {
+      const op = lx.symbol("&&");
+      return chainl1(s.Equality, op, (l, _op, r) => {
+        budget.consume(l.span.start);
+        return mkBinary(l, "&&", r);
+      });
+    },
 
-  Equality: (s) => {
-    const op = any(lx.symbol("=="), lx.symbol("!="));
-    return chainl1(s.Comparison, op, (l, o, r) =>
-      mkBinary(l, o as BinaryOp, r),
-    );
-  },
+    Equality: (s) => {
+      const op = any(lx.symbol("=="), lx.symbol("!="));
+      return chainl1(s.Comparison, op, (l, o, r) => {
+        budget.consume(l.span.start);
+        return mkBinary(l, o as BinaryOp, r);
+      });
+    },
 
-  Comparison: (s) => {
-    const op = any(
-      lx.symbol("<="),
-      lx.symbol(">="),
-      lx.symbol("<"),
-      lx.symbol(">"),
-    );
-    return chainl1(s.Additive, op, (l, o, r) => mkBinary(l, o as BinaryOp, r));
-  },
+    Comparison: (s) => {
+      const op = any(
+        lx.symbol("<="),
+        lx.symbol(">="),
+        lx.symbol("<"),
+        lx.symbol(">"),
+      );
+      return chainl1(s.Additive, op, (l, o, r) => {
+        budget.consume(l.span.start);
+        return mkBinary(l, o as BinaryOp, r);
+      });
+    },
 
-  Additive: (s) => {
-    const op = any(lx.symbol("+"), lx.symbol("-"));
-    return chainl1(s.Multiplicative, op, (l, o, r) =>
-      mkBinary(l, o as BinaryOp, r),
-    );
-  },
+    Additive: (s) => {
+      const op = any(lx.symbol("+"), lx.symbol("-"));
+      return chainl1(s.Multiplicative, op, (l, o, r) => {
+        budget.consume(l.span.start);
+        return mkBinary(l, o as BinaryOp, r);
+      });
+    },
 
-  Multiplicative: (s) => {
-    const op = any(lx.symbol("*"), lx.symbol("/"), lx.symbol("%"));
-    return chainl1(s.Unary, op, (l, o, r) => mkBinary(l, o as BinaryOp, r));
-  },
+    Multiplicative: (s) => {
+      const op = any(lx.symbol("*"), lx.symbol("/"), lx.symbol("%"));
+      return chainl1(s.Unary, op, (l, o, r) => {
+        budget.consume(l.span.start);
+        return mkBinary(l, o as BinaryOp, r);
+      });
+    },
 
-  Unary: (s) => {
-    const op = lx.lexeme(
-      map(withSpan(any(str("!"), str("-"), str("+"))), ({ value, start }) => ({
-        op: value as UnaryOp,
-        start,
-      })),
-    );
+    Unary: (s) => {
+      const op = lx.lexeme(
+        map(
+          withSpan(any(str("!"), str("-"), str("+"))),
+          ({ value, start }) => ({
+            op: value as UnaryOp,
+            start,
+          }),
+        ),
+      );
 
-    return map(seq(many(op), s.Postfix), ([ops, expr]) => {
-      let acc = expr;
-      for (let i = ops.length - 1; i >= 0; i--) {
-        const o = ops[i]!;
-        acc = mkUnary(o.op, o.start, acc);
-      }
-      return acc;
-    });
-  },
+      return map(seq(many(op), s.Postfix), ([ops, expr]) => {
+        let acc = expr;
+        for (let i = ops.length - 1; i >= 0; i--) {
+          const o = ops[i];
+          budget.consume(o.start);
+          acc = mkUnary(o.op, o.start, acc);
+        }
+        return acc;
+      });
+    },
 
-  Postfix: (s) => {
-    const memberOp = map(
-      seq(lx.symbol("."), cut(identSpan, "identifier after '.'")),
-      ([, prop]) => {
-        return (obj: Expr): Expr => mkMember(obj, prop);
-      },
-    );
+    Postfix: (s) => {
+      const memberOp = map(
+        seq(lx.symbol("."), cut(identSpan, "identifier after '.'")),
+        ([, prop]) => {
+          return (obj: Expr): Expr => {
+            budget.consume(obj.span.start);
+            return mkMember(obj, prop);
+          };
+        },
+      );
 
-    const args = sepBy(s.Expression, comma);
+      const args = sepBy(s.Expression, comma);
 
-    const callOp = map(
-      seq(lparen, args, cut(rparen, "closing ')'")),
-      ([, args, end]) => {
-        return (callee: Expr): Expr => mkCall(callee, args, end);
-      },
-    );
+      const callOp = map(
+        seq(lparen, args, cut(rparen, "closing ')'")),
+        ([, args, end]) => {
+          return (callee: Expr): Expr => {
+            budget.consume(callee.span.start);
+            return mkCall(callee, args, end);
+          };
+        },
+      );
 
-    const op = any(memberOp, callOp);
-    return map(seq(s.Primary, many(op)), ([base, ops]) => {
-      return ops.reduce((acc, fn) => fn(acc), base);
-    });
-  },
+      const op = any(memberOp, callOp);
+      return map(seq(s.Primary, many(op)), ([base, ops]) => {
+        return ops.reduce((acc, fn) => fn(acc), base);
+      });
+    },
 
-  Primary: (s) => {
-    const kwTrue = keyword("true");
-    const kwFalse = keyword("false");
-    const kwNull = keyword("null");
-    const kwUndefined = keyword("undefined");
+    Primary: (s) => {
+      const kwTrue = keyword("true");
+      const kwFalse = keyword("false");
+      const kwNull = keyword("null");
+      const kwUndefined = keyword("undefined");
 
-    const boolExpr: Parser<Expr> = any(
-      map(
-        kwTrue,
-        (t) =>
-          ({
+      const boolExpr: Parser<Expr> = any(
+        map(kwTrue, (t) => {
+          budget.consume(t.start);
+          return {
             kind: "boolean",
             value: true,
             span: { start: t.start, end: t.end },
-          }) satisfies Expr,
-      ),
-      map(
-        kwFalse,
-        (f) =>
-          ({
+          } satisfies Expr;
+        }),
+        map(kwFalse, (f) => {
+          budget.consume(f.start);
+          return {
             kind: "boolean",
             value: false,
             span: { start: f.start, end: f.end },
-          }) satisfies Expr,
-      ),
-    );
+          } satisfies Expr;
+        }),
+      );
 
-    const nullExpr: Parser<Expr> = map(
-      kwNull,
-      (n) =>
-        ({
+      const nullExpr: Parser<Expr> = map(kwNull, (n) => {
+        budget.consume(n.start);
+        return {
           kind: "null",
           span: { start: n.start, end: n.end },
-        }) satisfies Expr,
-    );
+        } satisfies Expr;
+      });
 
-    const undefinedExpr: Parser<Expr> = map(
-      kwUndefined,
-      (u) =>
-        ({
+      const undefinedExpr: Parser<Expr> = map(kwUndefined, (u) => {
+        budget.consume(u.start);
+        return {
           kind: "undefined",
           span: { start: u.start, end: u.end },
-        }) satisfies Expr,
-    );
+        } satisfies Expr;
+      });
 
-    const numExpr: Parser<Expr> = map(
-      numberSpan,
-      (n) =>
-        ({
+      const numExpr: Parser<Expr> = map(numberSpan, (n) => {
+        budget.consume(n.start);
+        return {
           kind: "number",
           value: n.value,
           span: { start: n.start, end: n.end },
-        }) satisfies Expr,
-    );
+        } satisfies Expr;
+      });
 
-    const strExpr: Parser<Expr> = map(
-      stringSpan,
-      (st) =>
-        ({
+      const strExpr: Parser<Expr> = map(stringSpan, (st) => {
+        budget.consume(st.start);
+        return {
           kind: "string",
           value: st.value,
           span: { start: st.start, end: st.end },
-        }) satisfies Expr,
-    );
+        } satisfies Expr;
+      });
 
-    const identExpr: Parser<Expr> = map(
-      guard(identSpan, (id) => !RESERVED.has(id.value), "identifier"),
-      (id) =>
-        ({
-          kind: "identifier",
-          name: id.value,
-          span: { start: id.start, end: id.end },
-        }) satisfies Expr,
-    );
+      const identExpr: Parser<Expr> = map(
+        guard(identSpan, (id) => !RESERVED.has(id.value), "identifier"),
+        (id) => {
+          budget.consume(id.start);
+          return {
+            kind: "identifier",
+            name: id.value,
+            span: { start: id.start, end: id.end },
+          } satisfies Expr;
+        },
+      );
 
-    const arrayExpr: Parser<Expr> = map(
-      seq(lbrack, sepBy(s.Expression, comma), rbrack),
-      ([start, elements, end]) =>
-        ({
-          kind: "array",
-          elements,
-          span: { start, end },
-        }) satisfies Expr,
-    );
+      const arrayExpr: Parser<Expr> = map(
+        seq(lbrack, sepBy(s.Expression, comma), rbrack),
+        ([start, elements, end]) => {
+          budget.consume(start);
+          return {
+            kind: "array",
+            elements,
+            span: { start, end },
+          } satisfies Expr;
+        },
+      );
 
-    const parenExpr: Parser<Expr> = map(
-      seq(lx.symbol("("), s.Expression, lx.symbol(")")),
-      ([, e]) => e,
-    );
+      const parenExpr: Parser<Expr> = map(
+        seq(lx.symbol("("), s.Expression, lx.symbol(")")),
+        ([, e]) => e,
+      );
 
-    return expecting(
-      any(
-        arrayExpr,
-        boolExpr,
-        nullExpr,
-        undefinedExpr,
-        numExpr,
-        strExpr,
-        parenExpr,
-        identExpr,
-      ),
-      "expression",
-    );
-  },
+      return expecting(
+        any(
+          arrayExpr,
+          boolExpr,
+          nullExpr,
+          undefinedExpr,
+          numExpr,
+          strExpr,
+          parenExpr,
+          identExpr,
+        ),
+        "expression",
+      );
+    },
 
-  File: (s) => map(seq(lx.trivia, s.Expression, eof()), ([, e]) => e),
-});
+    File: (s) => map(seq(lx.trivia, s.Expression, eof()), ([, e]) => e),
+  });
 
 const parseFailure = (
   error: ParseError,
@@ -519,43 +569,6 @@ const checkNesting = (
   return null;
 };
 
-const checkNodeLimit = (root: Expr, maxNodes: number): ParseError | null => {
-  const pending: Expr[] = [root];
-  let count = 0;
-
-  while (pending.length > 0) {
-    const node = pending.pop()!;
-    count++;
-    if (count > maxNodes) {
-      return { message: "AST node limit exceeded", index: node.span.start };
-    }
-
-    switch (node.kind) {
-      case "array":
-        for (const element of node.elements) pending.push(element);
-        break;
-      case "unary":
-        pending.push(node.expr);
-        break;
-      case "binary":
-        pending.push(node.right, node.left);
-        break;
-      case "member":
-        pending.push(node.object);
-        break;
-      case "call":
-        pending.push(node.callee);
-        for (const arg of node.args) pending.push(arg);
-        break;
-      case "conditional":
-        pending.push(node.alternate, node.consequent, node.test);
-        break;
-    }
-  }
-
-  return null;
-};
-
 /**
  * Parse a single expression into an AST.
  *
@@ -600,10 +613,17 @@ export function parseExpression(
   const nestingError = checkNesting(input, maxNestingDepth);
   if (nestingError) return parseFailure(nestingError, throwOnError);
 
-  let res: ReturnType<typeof ExpressionLang.File>;
+  const language = createExpressionLanguage(new AstNodeBudget(maxNodes));
+  let res: ReturnType<typeof language.File>;
   try {
-    res = ExpressionLang.File({ text: input, index: 0 });
+    res = language.File({ text: input, index: 0 });
   } catch (error) {
+    if (error instanceof AstNodeBudgetExceeded) {
+      return parseFailure(
+        { message: error.message, index: error.index },
+        throwOnError,
+      );
+    }
     if (!(error instanceof RangeError)) throw error;
     return parseFailure(
       { message: "parser recursion limit exceeded", index: 0 },
@@ -611,8 +631,6 @@ export function parseExpression(
     );
   }
   if (res.success) {
-    const nodeError = checkNodeLimit(res.value, maxNodes);
-    if (nodeError) return parseFailure(nodeError, throwOnError);
     return { success: true, value: res.value };
   }
 
