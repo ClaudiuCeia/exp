@@ -12,7 +12,7 @@ then evaluate safely against an explicit environment.
 - Repo: https://github.com/ClaudiuCeia/exp
 
 ```ts
-import { evaluateExpression } from "jsr:@claudiu-ceia/exp";
+import { evaluateExpression } from "@claudiu-ceia/exp";
 
 const res = evaluateExpression('status == "open" && priority >= 3', {
   env: { status: "open", priority: 4 },
@@ -46,11 +46,14 @@ Design goals:
 Install:
 
 ```sh
+# Bun
+bun add @claudiu-ceia/exp
+
+# Node
+npm install @claudiu-ceia/exp
+
 # Deno
 deno add jsr:@claudiu-ceia/exp
-
-# Node/Bun
-npm install @claudiu-ceia/exp
 ```
 
 Evaluate (non-throwing) and render a pretty diagnostic on failure:
@@ -60,7 +63,7 @@ import {
   evaluateExpression,
   ExpEvalError,
   formatDiagnosticReport,
-} from "jsr:@claudiu-ceia/exp";
+} from "@claudiu-ceia/exp";
 
 const input = "missing + 1";
 
@@ -242,7 +245,7 @@ Evaluation supports these defensive limits (all optional):
 #### Example: filter over an input object
 
 ```ts
-import { evaluateExpression } from "jsr:@claudiu-ceia/exp";
+import { evaluateExpression } from "@claudiu-ceia/exp";
 
 const env = {
   status: "open",
@@ -262,7 +265,7 @@ if (res.success) {
 #### Example: allow-listed helper functions
 
 ```ts
-import { evaluateExpression } from "jsr:@claudiu-ceia/exp";
+import { evaluateExpression } from "@claudiu-ceia/exp";
 
 const env = {
   user: { plan: "Free" },
@@ -289,11 +292,13 @@ Or add it to your project:
 deno add jsr:@claudiu-ceia/exp
 ```
 
-### npm
+### Bun / npm
 
-This package is published for npm via a generated build.
+The npm package is ESM-only and supports Bun and Node 24 or newer.
 
 ```sh
+bun add @claudiu-ceia/exp
+# or
 npm install @claudiu-ceia/exp
 ```
 
@@ -303,12 +308,14 @@ Then:
 import { evaluateExpression } from "@claudiu-ceia/exp";
 ```
 
+CommonJS applications can load it with dynamic `import()`.
+
 ## Getting started
 
 ### Parse only
 
 ```ts
-import { parseExpression } from "jsr:@claudiu-ceia/exp";
+import { parseExpression } from "@claudiu-ceia/exp";
 
 const parsed = parseExpression("1 + 2 * 3", { throwOnError: false });
 if (parsed.success) {
@@ -319,7 +326,7 @@ if (parsed.success) {
 ### Evaluate a pre-parsed AST
 
 ```ts
-import { evaluateAst, parseExpression } from "jsr:@claudiu-ceia/exp";
+import { evaluateAst, parseExpression } from "@claudiu-ceia/exp";
 
 const ast = parseExpression("x + 1").value;
 const out = evaluateAst(ast, { env: { x: 41 }, throwOnError: false });
@@ -331,7 +338,7 @@ const out = evaluateAst(ast, { env: { x: 41 }, throwOnError: false });
 
 Parse a single expression into a typed AST.
 
-- Import: `import { parseExpression } from "jsr:@claudiu-ceia/exp"`
+- Import: `import { parseExpression } from "@claudiu-ceia/exp"`
 - Returns: `ParseResult`
 - Throws: `ExpParseError` (default behavior)
 
@@ -356,7 +363,7 @@ Parse a single expression into a typed AST.
 
 Parse + evaluate in one step.
 
-- Import: `import { evaluateExpression } from "jsr:@claudiu-ceia/exp"`
+- Import: `import { evaluateExpression } from "@claudiu-ceia/exp"`
 - Returns: `EvalResult`
 - Throws: `ExpEvalError` (default behavior)
 
@@ -380,7 +387,7 @@ Parse errors:
 
 Evaluate a pre-parsed AST.
 
-- Import: `import { evaluateAst } from "jsr:@claudiu-ceia/exp"`
+- Import: `import { evaluateAst } from "@claudiu-ceia/exp"`
 - Returns: `EvalResult`
 - Throws: `ExpEvalError` (default behavior)
 
@@ -467,7 +474,7 @@ This makes it easy to render caret diagnostics from either a UTF-16 code-unit
 Example caret formatter:
 
 ```ts
-import { formatCaret } from "jsr:@claudiu-ceia/exp";
+import { formatCaret } from "@claudiu-ceia/exp";
 
 console.log(formatCaret("1 + ", 4));
 ```
@@ -475,7 +482,7 @@ console.log(formatCaret("1 + ", 4));
 This package also exports a richer report-style formatter (used by the CLI):
 
 ```ts
-import { formatDiagnosticReport } from "jsr:@claudiu-ceia/exp";
+import { formatDiagnosticReport } from "@claudiu-ceia/exp";
 
 console.log(
   formatDiagnosticReport("1 + ", {
@@ -500,16 +507,20 @@ the returned `{ success: false, error: { message, span?, steps?, index? } }`.
 
 ## Development
 
-- `deno task check`
-- `deno test`
+- `bun install`
+- `bun run check`
+- `bun run package:check`
+- `bun run bench`
+
+Deno 2 is only required to validate or publish the JSR package.
 
 ## CLI
 
-This repo includes a small Deno-only CLI (not part of the npm build), built with
+This repo includes a small Bun CLI (not part of the npm package), built with
 `@stricli/core`.
 
-- `deno task repl`
-- `deno task exp -- run [file]`
+- `bun run repl`
+- `bun run exp -- run [file]`
 
 ### Providing `env`
 
@@ -531,15 +542,15 @@ export const env = {
 Run:
 
 ```sh
-deno task exp -- run --env ./env.ts program.expr
-echo '1 + 2*3' | deno task exp -- run
-deno task repl -- --env ./env.ts
+bun run exp -- run --env ./env.ts program.expr
+echo '1 + 2*3' | bun run exp -- run
+bun run repl -- --env ./env.ts
 
 # value-only env (no functions)
-echo 'x + 1' | deno task exp -- run --env-inline '{"x": 41}'
+echo 'x + 1' | bun run exp -- run --env-inline '{"x": 41}'
 
 # see full flag docs
-deno task exp -- --help
+bun run exp -- --help
 ```
 
 ## License

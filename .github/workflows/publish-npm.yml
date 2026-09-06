@@ -8,102 +8,182 @@ on:
 permissions: {}
 
 jobs:
-  publish-jsr:
+  preflight:
     runs-on: ubuntu-latest
 
     permissions:
+      actions: read
       contents: read
-      id-token: write
 
     steps:
-      - uses: actions/checkout@v7
+      - name: Wait for earlier release runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          for _ in {1..120}; do
+            earlier="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/publish-npm.yml/runs?per_page=100" \
+              --jq ".workflow_runs | any(.id < ${GITHUB_RUN_ID} and .status != \"completed\")")"
+            if [[ "${earlier}" == "false" ]]; then
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "Timed out waiting for an earlier release run."
+          exit 1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      - name: Setup Node
-        uses: actions/setup-node@v7
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          node-version: 24
-          package-manager-cache: false
+          bun-version: 1.4.0
 
       - name: Setup Deno
-        uses: denoland/setup-deno@v2
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2
         with:
           deno-version: v2.x
 
-      - name: Verify tag matches deno.json version
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 26
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify stable tag and package versions
         shell: bash
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
-          version="${tag#v}"
-          deno_version="$(node -p "require('./deno.json').version")"
-          if [[ "${deno_version}" != "${version}" ]]; then
-            echo "Tag '${tag}' does not match deno.json version '${deno_version}'."
+          if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Tag '${tag}' is not a stable semantic version."
+            exit 1
+          fi
+          package_version="$(bun -e 'console.log(require("./package.json").version)')"
+          deno_version="$(bun -e 'console.log(require("./deno.json").version)')"
+          if [[ "${package_version}" != "${deno_version}" ]]; then
+            echo "package.json version '${package_version}' does not match deno.json version '${deno_version}'."
+            exit 1
+          fi
+          if [[ "${tag}" != "v${package_version}" ]]; then
+            echo "Tag '${tag}' does not match package version '${package_version}'."
             exit 1
           fi
 
-      - name: Verify formatting
-        run: deno fmt --check
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "Tag '${tag}' does not point to a commit on main."
+            exit 1
+          fi
 
-      - name: Lint
-        run: deno lint
+      - name: Run checks
+        run: bun run check
 
-      - name: Test
-        run: deno test --ignore=npm
+      - name: Verify JSR package
+        run: deno publish --dry-run
 
-      - name: Build npm package
-        run: deno task build:npm
+      - name: Verify npm package
+        run: bun run package:check
 
-      - name: Smoke test npm entry points
+      - name: Verify Node package runtime
         run: |
-          node --input-type=module -e 'await import("./npm/esm/mod.js")'
-          node -e 'require("./npm/script/mod.js")'
+          node --input-type=module <<'JS'
+          import { evaluateExpression } from "@claudiu-ceia/exp";
+          const result = evaluateExpression("1 + 2");
+          if (!result.success || result.value !== 3) process.exit(1);
+          JS
 
-      - name: Verify npm package contents
-        run: npm pack ./npm --dry-run
-
-      - name: Publish to JSR
-        run: deno publish
-
-  publish-npm:
+  publish-jsr:
     runs-on: ubuntu-latest
-    needs: [publish-jsr]
+    needs: preflight
 
     permissions:
       contents: read
       id-token: write
 
     steps:
-      - uses: actions/checkout@v7
-
-      - name: Setup Node
-        uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          registry-url: "https://registry.npmjs.org"
-          package-manager-cache: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Deno
-        uses: denoland/setup-deno@v2
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2
         with:
           deno-version: v2.x
 
-      - name: Build npm package
-        run: deno task build:npm
+      - name: Check whether JSR version exists
+        id: version
+        shell: bash
+        run: |
+          version="$(deno eval --allow-read=deno.json 'console.log(JSON.parse(Deno.readTextFileSync("deno.json")).version)')"
+          exists="$(VERSION="${version}" deno eval --allow-env=VERSION --allow-net=jsr.io '
+            const response = await fetch("https://jsr.io/@claudiu-ceia/exp/meta.json");
+            if (!response.ok) throw new Error("JSR metadata request failed: " + response.status);
+            const metadata = await response.json();
+            console.log(Object.hasOwn(metadata.versions, Deno.env.get("VERSION")));
+          ')"
+          echo "exists=${exists}" >> "${GITHUB_OUTPUT}"
+
+      - name: Publish to JSR
+        if: steps.version.outputs.exists != 'true'
+        run: deno publish
+
+  publish-npm:
+    runs-on: ubuntu-latest
+    needs: preflight
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 26
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Check whether npm version exists
+        id: version
+        shell: bash
+        run: |
+          version="$(bun -e 'console.log(require("./package.json").version)')"
+          versions="$(npm view @claudiu-ceia/exp versions --json)"
+          exists="$(VERSION="${version}" VERSIONS="${versions}" node -e '
+            const versions = JSON.parse(process.env.VERSIONS);
+            console.log(versions.includes(process.env.VERSION));
+          ')"
+          echo "exists=${exists}" >> "${GITHUB_OUTPUT}"
 
       - name: Publish to npm
-        run: npm publish ./npm --access public
+        if: steps.version.outputs.exists != 'true'
+        shell: bash
+        run: |
+          version="$(bun -e 'console.log(require("./package.json").version)')"
+          versions="$(npm view @claudiu-ceia/exp versions --json)"
+          tag="$(VERSION="${version}" VERSIONS="${versions}" bun run scripts/npm-publish-tag.ts)"
+          npm publish --access public --tag "${tag}"
 
   github-release:
     runs-on: ubuntu-latest
-    needs: [publish-npm]
+    needs: [publish-jsr, publish-npm]
 
     permissions:
       contents: write
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -113,11 +193,7 @@ jobs:
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
 
-          prev_tag="$(
-            git tag --list "v*" --sort=-version:refname \
-              | grep -v "^${tag}$" \
-              | head -n 1 || true
-          )"
+          prev_tag="$(git describe --tags --match "v[0-9]*.[0-9]*.[0-9]*" --abbrev=0 "${tag}^" 2>/dev/null || true)"
 
           {
             echo "# ${tag}"
@@ -135,7 +211,7 @@ jobs:
           } > RELEASE_NOTES.md
 
       - name: Create GitHub release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           name: ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}

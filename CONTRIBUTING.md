@@ -5,17 +5,21 @@ issue before starting implementation so the approach can be discussed.
 
 ## Development
 
-Install Deno 2, clone the repository, and run:
+Install Bun 1.4, clone the repository, and run:
 
 ```sh
-deno task check
+bun install
+bun run check
 ```
 
 Changes that affect npm compatibility should also run:
 
 ```sh
-deno task build:npm
+bun run package:check
 ```
+
+Deno 2 is only required to validate changes to the JSR package with
+`deno publish --dry-run`.
 
 Keep pull requests focused, add regression tests for behavior changes, and
 update public documentation when an API changes. Commit messages should follow

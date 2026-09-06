@@ -52,11 +52,11 @@ export type Expr =
   | (NodeBase & { kind: "member"; object: Expr; property: string })
   | (NodeBase & { kind: "call"; callee: Expr; args: Expr[] })
   | (NodeBase & {
-    kind: "conditional";
-    test: Expr;
-    consequent: Expr;
-    alternate: Expr;
-  });
+      kind: "conditional";
+      test: Expr;
+      consequent: Expr;
+      alternate: Expr;
+    });
 
 /** Create a unary expression node. */
 export const mkUnary = (op: UnaryOp, start: number, expr: Expr): Expr => {

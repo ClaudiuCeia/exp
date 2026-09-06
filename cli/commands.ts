@@ -1,4 +1,6 @@
 import { buildCommand } from "@stricli/core";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { evaluateExpression } from "../src/eval.ts";
 import type { RuntimeValue } from "../src/runtime.ts";
 import { formatDiagnosticReport } from "../src/diagnostics.ts";
@@ -20,34 +22,19 @@ type CliContext = {
   };
 };
 
-const encoder = new TextEncoder();
-
-const writeStdout = async (s: string): Promise<void> => {
-  await Deno.stdout.write(encoder.encode(s));
-};
-
-const writeStderr = async (s: string): Promise<void> => {
-  await Deno.stderr.write(encoder.encode(s));
-};
-
-const toFileUrl = (path: string): URL => {
-  const base = new URL(`file://${Deno.cwd()}/`);
-  return new URL(path, base);
-};
-
 const isRecord = (v: unknown): v is Record<string, unknown> => {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 };
 
 const readAllStdin = async (): Promise<string> => {
-  return await new Response(Deno.stdin.readable).text();
+  return await Bun.stdin.text();
 };
 
 const loadEnvFromModule = async (
   modulePath: string,
 ): Promise<Record<string, RuntimeValue>> => {
   // Bust the module cache so repeated loads pick up edits.
-  const url = toFileUrl(modulePath);
+  const url = pathToFileURL(resolve(modulePath));
   const bust = new URL(url.href);
   bust.searchParams.set("t", Date.now().toString(36));
 
@@ -64,7 +51,7 @@ const loadEnvFromModule = async (
 const loadEnvFromJson = async (
   jsonPath: string,
 ): Promise<Record<string, RuntimeValue>> => {
-  const text = await Deno.readTextFile(jsonPath);
+  const text = await Bun.file(jsonPath).text();
   const value = JSON.parse(text) as unknown;
   if (!isRecord(value)) throw new Error(`--env-json must be a JSON object`);
   return value as Record<string, RuntimeValue>;
@@ -95,7 +82,7 @@ const resolveEnv = async (
 
 const formatValue = (value: RuntimeValue, format: Format): string => {
   if (format === "inspect") {
-    return `${Deno.inspect(value, { colors: false, depth: 6 })}\n`;
+    return `${Bun.inspect(value, { colors: false, depth: 6 })}\n`;
   }
 
   // json
@@ -104,7 +91,7 @@ const formatValue = (value: RuntimeValue, format: Format): string => {
   try {
     return `${JSON.stringify(value)}\n`;
   } catch {
-    return `${Deno.inspect(value, { colors: false, depth: 6 })}\n`;
+    return `${Bun.inspect(value, { colors: false, depth: 6 })}\n`;
   }
 };
 
@@ -148,9 +135,8 @@ export const runCommand = buildCommand({
     const env = await resolveEnv(flags);
     const format = flags.format ?? "inspect";
 
-    const input = file && file !== "-"
-      ? await Deno.readTextFile(file)
-      : await readAllStdin();
+    const input =
+      file && file !== "-" ? await Bun.file(file).text() : await readAllStdin();
 
     const expr = input.trim();
     if (expr.length === 0) {
@@ -164,11 +150,13 @@ export const runCommand = buildCommand({
     });
 
     if (!res.success) {
-      throw new Error(formatDiagnosticReport(expr, {
-        message: res.error.message,
-        index: res.error.index,
-        span: res.error.span,
-      }));
+      throw new Error(
+        formatDiagnosticReport(expr, {
+          message: res.error.message,
+          index: res.error.index,
+          span: res.error.span,
+        }),
+      );
     }
 
     this.process.stdout.write(formatValue(res.value, format));
@@ -211,10 +199,8 @@ export const replCommand = buildCommand({
     help();
 
     const input = new ReplLineDecoder();
-    const buf = new Uint8Array(1024 * 64);
-
-    const prompt = async () => {
-      await writeStdout("> ");
+    const prompt = () => {
+      this.process.stdout.write("> ");
     };
 
     const handleLine = async (
@@ -271,13 +257,11 @@ export const replCommand = buildCommand({
 
       if (!res.success) {
         this.process.stdout.write(
-          `${
-            formatDiagnosticReport(line, {
-              message: res.error.message,
-              index: res.error.index,
-              span: res.error.span,
-            })
-          }\n`,
+          `${formatDiagnosticReport(line, {
+            message: res.error.message,
+            index: res.error.index,
+            span: res.error.span,
+          })}\n`,
         );
       } else {
         this.process.stdout.write(formatValue(res.value, format));
@@ -289,11 +273,8 @@ export const replCommand = buildCommand({
 
     await prompt();
 
-    while (true) {
-      const n = await Deno.stdin.read(buf);
-      if (n === null) break;
-
-      for (const lineRaw of input.push(buf.subarray(0, n))) {
+    for await (const chunk of process.stdin) {
+      for (const lineRaw of input.push(chunk)) {
         const r = await handleLine(lineRaw, { promptAfter: true });
         if (r === "exit") return;
       }
@@ -312,21 +293,17 @@ export const replCommand = buildCommand({
   },
 });
 
-export const denoContext: CliContext = {
+export const bunContext: CliContext = {
   process: {
     stdout: {
       write: (s: string) => {
-        // best-effort sync write (stricli expects sync-ish writes)
-        Deno.stdout.writeSync(encoder.encode(s));
+        process.stdout.write(s);
       },
     },
     stderr: {
       write: (s: string) => {
-        Deno.stderr.writeSync(encoder.encode(s));
+        process.stderr.write(s);
       },
     },
   },
 };
-
-// Avoid unused warnings for helpers used only in async prompt.
-void writeStderr;

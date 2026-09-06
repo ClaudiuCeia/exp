@@ -22,9 +22,11 @@ export type Lexer = Readonly<{
   lexeme: <T>(p: Parser<T>) => Parser<T>;
 }>;
 
-export type StringSpan = Readonly<
-  { value: string; start: number; end: number }
->;
+export type StringSpan = Readonly<{
+  value: string;
+  start: number;
+  end: number;
+}>;
 
 /**
  * String literal parsing aims to match ECMAScript (strict mode) escape semantics.
@@ -106,14 +108,14 @@ const unicodeCodePointEscapeBody: Parser<string> = (ctx) => {
   const open = str("{")(ctx);
   if (!open.success) return open;
 
-  const digitsRes = cut(hex1to6, "1-6 hex digits") /* committed */(open.ctx);
+  const digitsRes = cut(hex1to6, "1-6 hex digits")(/* committed */ open.ctx);
   if (!digitsRes.success) return digitsRes;
 
-  const close = cut(str("}"), "'}'") /* committed */(digitsRes.ctx);
+  const close = cut(str("}"), "'}'")(/* committed */ digitsRes.ctx);
   if (!close.success) return close;
 
   const cp = parseInt(digitsRes.value, 16);
-  if (!Number.isFinite(cp) || cp < 0 || cp > 0x10FFFF) {
+  if (!Number.isFinite(cp) || cp < 0 || cp > 0x10ffff) {
     return failure(close.ctx, "unicode code point");
   }
 
@@ -126,9 +128,7 @@ const unicodeEscape: Parser<string> = (ctx) => {
   return cut(
     any(unicodeCodePointEscapeBody, unicodeEscape4Body),
     "unicode escape",
-  )(
-    u.ctx,
-  );
+  )(u.ctx);
 };
 
 const identityEscapeChar = regex(/[^\n\r\u2028\u2029]/, "escape character");
@@ -157,9 +157,10 @@ const escapeSequence: Parser<string> = any(
 const escape = map(seq(str("\\"), escapeSequence), ([, ch]) => ch);
 
 const makeStringLiteral = (quote: "'" | '"'): Parser<string> => {
-  const normalChar = quote === '"'
-    ? regex(/[^"\\\n\r\u2028\u2029]/, "string character")
-    : regex(/[^'\\\n\r\u2028\u2029]/, "string character");
+  const normalChar =
+    quote === '"'
+      ? regex(/[^"\\\n\r\u2028\u2029]/, "string character")
+      : regex(/[^'\\\n\r\u2028\u2029]/, "string character");
 
   return map(
     seq(

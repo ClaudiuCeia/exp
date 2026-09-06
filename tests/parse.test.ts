@@ -1,7 +1,8 @@
-import { assertEquals, assertStringIncludes, assertThrows } from "@std/assert";
+import { test } from "bun:test";
+import { assertEquals, assertStringIncludes, assertThrows } from "./assert.ts";
 import { ExpParseError, parseExpression } from "../src/parse.ts";
 
-Deno.test("parseExpression parses numbers", () => {
+test("parseExpression parses numbers", () => {
   const res = parseExpression("  123  ", { throwOnError: false });
   assertEquals(res.success, true);
   if (res.success) {
@@ -11,14 +12,14 @@ Deno.test("parseExpression parses numbers", () => {
   }
 });
 
-Deno.test("parseExpression parses undefined", () => {
+test("parseExpression parses undefined", () => {
   const res = parseExpression("undefined", { throwOnError: false });
   assertEquals(res.success, true);
   if (!res.success) return;
   assertEquals(res.value.kind, "undefined");
 });
 
-Deno.test("parseExpression parses nullish coalescing", () => {
+test("parseExpression parses nullish coalescing", () => {
   const res = parseExpression("a ?? b", { throwOnError: false });
   assertEquals(res.success, true);
   if (!res.success) return;
@@ -27,7 +28,7 @@ Deno.test("parseExpression parses nullish coalescing", () => {
   assertEquals(res.value.op, "??");
 });
 
-Deno.test("parseExpression parses quoted strings", () => {
+test("parseExpression parses quoted strings", () => {
   const res = parseExpression("'hi'", { throwOnError: false });
   assertEquals(res.success, true);
   if (res.success) {
@@ -37,7 +38,7 @@ Deno.test("parseExpression parses quoted strings", () => {
   }
 });
 
-Deno.test("parseExpression parses double-quoted strings", () => {
+test("parseExpression parses double-quoted strings", () => {
   const res = parseExpression('"hi"', { throwOnError: false });
   assertEquals(res.success, true);
   if (!res.success) return;
@@ -46,7 +47,7 @@ Deno.test("parseExpression parses double-quoted strings", () => {
   assertEquals(res.value.value, "hi");
 });
 
-Deno.test("parseExpression parses escapes in double-quoted strings", () => {
+test("parseExpression parses escapes in double-quoted strings", () => {
   const res = parseExpression('"a\\n\\t\\u0041"', { throwOnError: false });
   assertEquals(res.success, true);
   if (!res.success) return;
@@ -55,7 +56,7 @@ Deno.test("parseExpression parses escapes in double-quoted strings", () => {
   assertEquals(res.value.value, "a\n\tA");
 });
 
-Deno.test("parseExpression parses string escapes", () => {
+test("parseExpression parses string escapes", () => {
   const res = parseExpression("'a\\n\\t\\u0041'", { throwOnError: false });
   assertEquals(res.success, true);
   if (!res.success) return;
@@ -64,7 +65,7 @@ Deno.test("parseExpression parses string escapes", () => {
   assertEquals(res.value.value, "a\n\tA");
 });
 
-Deno.test("parseExpression parses more single-character escapes", () => {
+test("parseExpression parses more single-character escapes", () => {
   const res = parseExpression("'\\b\\f\\v\\\\'", { throwOnError: false });
   assertEquals(res.success, true);
   if (!res.success) return;
@@ -73,7 +74,7 @@ Deno.test("parseExpression parses more single-character escapes", () => {
   assertEquals(res.value.value, "\b\f\v\\");
 });
 
-Deno.test("parseExpression parses escaped quotes", () => {
+test("parseExpression parses escaped quotes", () => {
   const a = parseExpression("'\\''", { throwOnError: false });
   assertEquals(a.success, true);
   if (!a.success) return;
@@ -89,7 +90,7 @@ Deno.test("parseExpression parses escaped quotes", () => {
   assertEquals(b.value.value, '"');
 });
 
-Deno.test("parseExpression supports identity escapes (strict mode)", () => {
+test("parseExpression supports identity escapes (strict mode)", () => {
   const res = parseExpression("'\\q'", { throwOnError: false });
   assertEquals(res.success, true);
   if (!res.success) return;
@@ -98,12 +99,12 @@ Deno.test("parseExpression supports identity escapes (strict mode)", () => {
   assertEquals(res.value.value, "q");
 });
 
-Deno.test("parseExpression fails on invalid unicode escape", () => {
+test("parseExpression fails on invalid unicode escape", () => {
   const res = parseExpression("'\\u12G4'", { throwOnError: false });
   assertEquals(res.success, false);
 });
 
-Deno.test("parseExpression parses \\xNN and \\u{...} escapes", () => {
+test("parseExpression parses \\xNN and \\u{...} escapes", () => {
   const res = parseExpression("'\\x41\\u{1F600}'", { throwOnError: false });
   assertEquals(res.success, true);
   if (!res.success) return;
@@ -112,7 +113,7 @@ Deno.test("parseExpression parses \\xNN and \\u{...} escapes", () => {
   assertEquals(res.value.value, "A\u{1F600}");
 });
 
-Deno.test("parseExpression supports line continuations in strings", () => {
+test("parseExpression supports line continuations in strings", () => {
   const res = parseExpression("'a\\\nB'", { throwOnError: false });
   assertEquals(res.success, true);
   if (!res.success) return;
@@ -121,7 +122,7 @@ Deno.test("parseExpression supports line continuations in strings", () => {
   assertEquals(res.value.value, "aB");
 });
 
-Deno.test("parseExpression supports CR-only line continuations in strings", () => {
+test("parseExpression supports CR-only line continuations in strings", () => {
   const res = parseExpression("'a\\\rB'", { throwOnError: false });
   assertEquals(res.success, true);
   if (!res.success) return;
@@ -130,7 +131,7 @@ Deno.test("parseExpression supports CR-only line continuations in strings", () =
   assertEquals(res.value.value, "aB");
 });
 
-Deno.test("parseExpression supports CRLF line continuations in strings", () => {
+test("parseExpression supports CRLF line continuations in strings", () => {
   const res = parseExpression("'a\\\r\nB'", { throwOnError: false });
   assertEquals(res.success, true);
   if (!res.success) return;
@@ -139,7 +140,7 @@ Deno.test("parseExpression supports CRLF line continuations in strings", () => {
   assertEquals(res.value.value, "aB");
 });
 
-Deno.test("parseExpression supports unicode line separator continuations in strings", () => {
+test("parseExpression supports unicode line separator continuations in strings", () => {
   const res = parseExpression("'a\\\u2028B'", { throwOnError: false });
   assertEquals(res.success, true);
   if (!res.success) return;
@@ -148,7 +149,7 @@ Deno.test("parseExpression supports unicode line separator continuations in stri
   assertEquals(res.value.value, "aB");
 });
 
-Deno.test("parseExpression supports unicode paragraph separator continuations in strings", () => {
+test("parseExpression supports unicode paragraph separator continuations in strings", () => {
   const res = parseExpression("'a\\\u2029B'", { throwOnError: false });
   assertEquals(res.success, true);
   if (!res.success) return;
@@ -157,12 +158,12 @@ Deno.test("parseExpression supports unicode paragraph separator continuations in
   assertEquals(res.value.value, "aB");
 });
 
-Deno.test("parseExpression fails on raw newlines inside string literals", () => {
+test("parseExpression fails on raw newlines inside string literals", () => {
   const res = parseExpression("'a\nb'", { throwOnError: false });
   assertEquals(res.success, false);
 });
 
-Deno.test("parseExpression parses \\0 when not followed by a digit", () => {
+test("parseExpression parses \\0 when not followed by a digit", () => {
   const res = parseExpression("'\\0x'", { throwOnError: false });
   assertEquals(res.success, true);
   if (!res.success) return;
@@ -173,37 +174,37 @@ Deno.test("parseExpression parses \\0 when not followed by a digit", () => {
   assertEquals(res.value.value[1], "x");
 });
 
-Deno.test("parseExpression fails on strict-mode digit escapes (\\8)", () => {
+test("parseExpression fails on strict-mode digit escapes (\\8)", () => {
   const res = parseExpression("'\\8'", { throwOnError: false });
   assertEquals(res.success, false);
 });
 
-Deno.test("parseExpression fails on strict-mode digit escapes (\\1)", () => {
+test("parseExpression fails on strict-mode digit escapes (\\1)", () => {
   const res = parseExpression("'\\1'", { throwOnError: false });
   assertEquals(res.success, false);
 });
 
-Deno.test("parseExpression fails on strict-mode legacy octal (\\01)", () => {
+test("parseExpression fails on strict-mode legacy octal (\\01)", () => {
   const res = parseExpression("'\\01'", { throwOnError: false });
   assertEquals(res.success, false);
 });
 
-Deno.test("parseExpression fails on invalid hex escape", () => {
+test("parseExpression fails on invalid hex escape", () => {
   const res = parseExpression("'\\x4'", { throwOnError: false });
   assertEquals(res.success, false);
 });
 
-Deno.test("parseExpression fails on missing '}' in unicode code point escape", () => {
+test("parseExpression fails on missing '}' in unicode code point escape", () => {
   const res = parseExpression("'\\u{1F600'", { throwOnError: false });
   assertEquals(res.success, false);
 });
 
-Deno.test("parseExpression fails on out-of-range unicode code point", () => {
+test("parseExpression fails on out-of-range unicode code point", () => {
   const res = parseExpression("'\\u{110000}'", { throwOnError: false });
   assertEquals(res.success, false);
 });
 
-Deno.test("parseExpression respects operator precedence", () => {
+test("parseExpression respects operator precedence", () => {
   const res = parseExpression("1 + 2 * 3", { throwOnError: false });
   assertEquals(res.success, true);
   if (!res.success) return;
@@ -217,7 +218,7 @@ Deno.test("parseExpression respects operator precedence", () => {
   assertEquals(res.value.right.op, "*");
 });
 
-Deno.test("parseExpression parses member access and calls", () => {
+test("parseExpression parses member access and calls", () => {
   const res = parseExpression("foo.bar(1, 2)", { throwOnError: false });
   assertEquals(res.success, true);
   if (!res.success) return;
@@ -230,7 +231,7 @@ Deno.test("parseExpression parses member access and calls", () => {
   assertEquals(res.value.callee.property, "bar");
 });
 
-Deno.test("parseExpression parses arrays", () => {
+test("parseExpression parses arrays", () => {
   const res = parseExpression("[1, 2, 3]", { throwOnError: false });
   assertEquals(res.success, true);
   if (!res.success) return;
@@ -240,7 +241,7 @@ Deno.test("parseExpression parses arrays", () => {
   assertEquals(res.value.elements.length, 3);
 });
 
-Deno.test("parseExpression parses ternary conditionals", () => {
+test("parseExpression parses ternary conditionals", () => {
   const res = parseExpression("true ? 1 : 2", { throwOnError: false });
   assertEquals(res.success, true);
   if (!res.success) return;
@@ -252,7 +253,7 @@ Deno.test("parseExpression parses ternary conditionals", () => {
   assertEquals(res.value.alternate.kind, "number");
 });
 
-Deno.test("parseExpression parses pipeline operator", () => {
+test("parseExpression parses pipeline operator", () => {
   const res = parseExpression("1 + 2 |> inc", { throwOnError: false });
   assertEquals(res.success, true);
   if (!res.success) return;
@@ -267,12 +268,12 @@ Deno.test("parseExpression parses pipeline operator", () => {
   assertEquals(res.value.args[0].kind, "binary");
 });
 
-Deno.test("parseExpression fails on empty", () => {
+test("parseExpression fails on empty", () => {
   const res = parseExpression("   ", { throwOnError: false });
   assertEquals(res.success, false);
 });
 
-Deno.test("parseExpression throws by default on parse errors", () => {
+test("parseExpression throws by default on parse errors", () => {
   try {
     parseExpression("   ");
     throw new Error("expected parseExpression to throw");
@@ -285,7 +286,7 @@ Deno.test("parseExpression throws by default on parse errors", () => {
   }
 });
 
-Deno.test("parseExpression reports missing RHS as expected expression", () => {
+test("parseExpression reports missing RHS as expected expression", () => {
   const res = parseExpression("1 +", { throwOnError: false });
   assertEquals(res.success, false);
   if (res.success) return;
@@ -295,7 +296,7 @@ Deno.test("parseExpression reports missing RHS as expected expression", () => {
   assertEquals(res.error.index, 3);
 });
 
-Deno.test("parseExpression reports pipeline missing RHS with helpful message", () => {
+test("parseExpression reports pipeline missing RHS with helpful message", () => {
   const res = parseExpression("1 |>", { throwOnError: false });
   assertEquals(res.success, false);
   if (res.success) return;
@@ -303,7 +304,7 @@ Deno.test("parseExpression reports pipeline missing RHS with helpful message", (
   assertStringIncludes(res.error.message, "expression after '|>'");
 });
 
-Deno.test("parseExpression reports conditional missing consequent with helpful message", () => {
+test("parseExpression reports conditional missing consequent with helpful message", () => {
   const res = parseExpression("1 ?", { throwOnError: false });
   assertEquals(res.success, false);
   if (res.success) return;
@@ -311,7 +312,7 @@ Deno.test("parseExpression reports conditional missing consequent with helpful m
   assertStringIncludes(res.error.message, "expression after '?'");
 });
 
-Deno.test("parseExpression reports member missing property name", () => {
+test("parseExpression reports member missing property name", () => {
   const res = parseExpression("foo.", { throwOnError: false });
   assertEquals(res.success, false);
   if (res.success) return;
@@ -319,7 +320,7 @@ Deno.test("parseExpression reports member missing property name", () => {
   assertStringIncludes(res.error.message, "identifier after '.'");
 });
 
-Deno.test("parseExpression reports call missing closing paren", () => {
+test("parseExpression reports call missing closing paren", () => {
   const res = parseExpression("f(", { throwOnError: false });
   assertEquals(res.success, false);
   if (res.success) return;
@@ -327,7 +328,7 @@ Deno.test("parseExpression reports call missing closing paren", () => {
   assertStringIncludes(res.error.message, "closing ')'");
 });
 
-Deno.test("parseExpression enforces input length limits", () => {
+test("parseExpression enforces input length limits", () => {
   const res = parseExpression("12345", {
     throwOnError: false,
     maxInputLength: 4,
@@ -338,7 +339,7 @@ Deno.test("parseExpression enforces input length limits", () => {
   assertEquals(res.error.index, 4);
 });
 
-Deno.test("parseExpression rejects excessive nesting without overflowing", () => {
+test("parseExpression rejects excessive nesting without overflowing", () => {
   const inputs = [
     "(".repeat(10_000) + "1" + ")".repeat(10_000),
     "[".repeat(10_000) + "1" + "]".repeat(10_000),
@@ -357,7 +358,7 @@ Deno.test("parseExpression rejects excessive nesting without overflowing", () =>
   }
 });
 
-Deno.test("parseExpression ignores delimiters inside strings", () => {
+test("parseExpression ignores delimiters inside strings", () => {
   const res = parseExpression('"(([[???"', {
     throwOnError: false,
     maxNestingDepth: 0,
@@ -365,7 +366,7 @@ Deno.test("parseExpression ignores delimiters inside strings", () => {
   assertEquals(res.success, true);
 });
 
-Deno.test("parseExpression distinguishes nullish operators from conditionals", () => {
+test("parseExpression distinguishes nullish operators from conditionals", () => {
   const res = parseExpression("null ?? undefined", {
     throwOnError: false,
     maxNestingDepth: 0,
@@ -373,7 +374,7 @@ Deno.test("parseExpression distinguishes nullish operators from conditionals", (
   assertEquals(res.success, true);
 });
 
-Deno.test("parseExpression enforces AST node limits", () => {
+test("parseExpression enforces AST node limits", () => {
   const res = parseExpression("1 + 2", {
     throwOnError: false,
     maxNodes: 2,
@@ -383,7 +384,7 @@ Deno.test("parseExpression enforces AST node limits", () => {
   assertStringIncludes(res.error.message, "AST node limit");
 });
 
-Deno.test("parseExpression validates resource limit options", () => {
+test("parseExpression validates resource limit options", () => {
   const res = parseExpression("1", {
     throwOnError: false,
     maxNodes: Number.NaN,

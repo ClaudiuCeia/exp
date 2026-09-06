@@ -1,3 +1,4 @@
+import { bench, run } from "mitata";
 import { parseExpression } from "../src/parse.ts";
 
 const SIMPLE = "status == 'open' && priority >= 3";
@@ -18,10 +19,12 @@ const COMPLEX_RULE = `(
 )
 && !std.includes(bannedCountries, user.country ?? "XX")`;
 
-Deno.bench("parse: simple filter", () => {
+bench("parse: simple filter", () => {
   parseExpression(SIMPLE);
 });
 
-Deno.bench("parse: complex rule", () => {
+bench("parse: complex rule", () => {
   parseExpression(COMPLEX_RULE);
 });
+
+await run();

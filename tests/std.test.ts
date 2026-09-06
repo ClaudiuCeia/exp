@@ -1,9 +1,10 @@
-import { assertEquals, assertThrows } from "@std/assert";
+import { test } from "bun:test";
+import { assertEquals, assertThrows } from "./assert.ts";
 import { evaluateExpression } from "../src/eval.ts";
 import type { RuntimeValue } from "../src/runtime.ts";
 import { std } from "../src/std.ts";
 
-Deno.test("std.len works for strings and arrays", () => {
+test("std.len works for strings and arrays", () => {
   const a = evaluateExpression("std.len('abc')", { throwOnError: false });
   assertEquals(a.success, true);
   if (!a.success) return;
@@ -15,7 +16,7 @@ Deno.test("std.len works for strings and arrays", () => {
   assertEquals(b.value, 3);
 });
 
-Deno.test("std.len rejects objects", () => {
+test("std.len rejects objects", () => {
   const res = evaluateExpression("std.len(obj)", {
     throwOnError: false,
     env: { obj: {} },
@@ -23,7 +24,7 @@ Deno.test("std.len rejects objects", () => {
   assertEquals(res.success, false);
 });
 
-Deno.test("std math helpers work", () => {
+test("std math helpers work", () => {
   const a = evaluateExpression("std.floor(1.9)", { throwOnError: false });
   assertEquals(a.success, true);
   if (!a.success) return;
@@ -35,7 +36,7 @@ Deno.test("std math helpers work", () => {
   assertEquals(b.value, 0);
 });
 
-Deno.test("std string helpers work", () => {
+test("std string helpers work", () => {
   const res = evaluateExpression("std.upper(std.trim('  hi '))", {
     throwOnError: false,
   });
@@ -44,7 +45,7 @@ Deno.test("std string helpers work", () => {
   assertEquals(res.value, "HI");
 });
 
-Deno.test("std.includes supports array membership", () => {
+test("std.includes supports array membership", () => {
   const a = evaluateExpression("std.includes([1,2,3], 2)", {
     throwOnError: false,
   });
@@ -60,7 +61,7 @@ Deno.test("std.includes supports array membership", () => {
   assertEquals(b.value, false);
 });
 
-Deno.test("env cannot override std", () => {
+test("env cannot override std", () => {
   const res = evaluateExpression("std.len('a')", {
     throwOnError: false,
     env: { std: {} },
@@ -68,7 +69,7 @@ Deno.test("env cannot override std", () => {
   assertEquals(res.success, false);
 });
 
-Deno.test("std cannot be mutated by consumers", () => {
+test("std cannot be mutated by consumers", () => {
   assertThrows(() => {
     (std as Record<string, RuntimeValue>).len = () => 999;
   }, TypeError);

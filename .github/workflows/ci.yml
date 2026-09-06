@@ -3,51 +3,326 @@ name: CI
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
+  pull_request: {}
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  quality:
     runs-on: ubuntu-latest
+    outputs:
+      formatting: ${{ steps.formatting.outcome }}
+      lint: ${{ steps.lint.outcome }}
+      types: ${{ steps.types.outcome }}
+      tests: ${{ steps.tests.outcome }}
+      benchmark_verification: ${{ steps.benchmark_verification.outcome }}
+      package: ${{ steps.package.outcome }}
+      runtime: ${{ steps.runtime.outcome }}
+
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Setup Deno
-        uses: denoland/setup-deno@v2
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          deno-version: v2.x
+          bun-version: 1.4.0
 
-      - name: Setup Node
-        uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          package-manager-cache: false
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
 
-      - name: Verify formatting
-        run: deno fmt --check
+      - name: Check formatting
+        id: formatting
+        continue-on-error: true
+        run: bun run format:check
 
-      - name: Run linter
-        run: deno lint
+      - name: Lint
+        id: lint
+        continue-on-error: true
+        run: bun run lint
+
+      - name: Type-check
+        id: types
+        continue-on-error: true
+        run: bun run typecheck
 
       - name: Run tests
-        run: deno test --ignore=npm
+        id: tests
+        continue-on-error: true
+        run: bun run test
 
-      - name: Build npm package
-        run: deno task build:npm
+      - name: Verify benchmark correctness
+        id: benchmark_verification
+        continue-on-error: true
+        run: bun run bench:verify
 
-      - name: Test packed npm package
+      - name: Verify npm package
+        id: package
+        continue-on-error: true
+        run: bun run package:check
+
+      - name: Verify Bun package runtime
+        id: runtime
+        continue-on-error: true
+        run: |
+          bun --eval '
+            import { evaluateExpression } from "@claudiu-ceia/exp";
+            const result = evaluateExpression("1 + 2");
+            if (!result.success || result.value !== 3) process.exit(1);
+          '
+
+      - name: Enforce quality checks
+        if: always()
+        env:
+          FORMATTING: ${{ steps.formatting.outcome }}
+          LINT: ${{ steps.lint.outcome }}
+          TYPES: ${{ steps.types.outcome }}
+          TESTS: ${{ steps.tests.outcome }}
+          BENCHMARK_VERIFICATION: ${{ steps.benchmark_verification.outcome }}
+          PACKAGE: ${{ steps.package.outcome }}
+          RUNTIME: ${{ steps.runtime.outcome }}
+        run: |
+          for result in "$FORMATTING" "$LINT" "$TYPES" "$TESTS" "$BENCHMARK_VERIFICATION" "$PACKAGE" "$RUNTIME"; do
+            if [[ "$result" != "success" ]]; then
+              exit 1
+            fi
+          done
+
+  npm-compat:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [24, 26]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build and pack npm package
         shell: bash
         run: |
           set -euo pipefail
-          package="$(npm pack ./npm --pack-destination "${RUNNER_TEMP}" --silent)"
+          bun run build
+          package="$(npm pack --pack-destination "${RUNNER_TEMP}" --silent)"
           consumer="${RUNNER_TEMP}/consumer"
           npm install --prefix "${consumer}" "${RUNNER_TEMP}/${package}"
           cd "${consumer}"
           node --input-type=module -e \
             'const { evaluateExpression } = await import("@claudiu-ceia/exp"); if (evaluateExpression("1 + 2").value !== 3) process.exit(1)'
-          node -e \
-            'const { evaluateExpression } = require("@claudiu-ceia/exp"); if (evaluateExpression("1 + 2").value !== 3) process.exit(1)'
+
+  jsr:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2
+        with:
+          deno-version: v2.x
+
+      - name: Verify package versions
+        run: |
+          deno eval --allow-read '
+            const packageVersion = JSON.parse(await Deno.readTextFile("package.json")).version;
+            const denoVersion = JSON.parse(await Deno.readTextFile("deno.json")).version;
+            if (packageVersion !== denoVersion) {
+              throw new Error("package.json version " + packageVersion + " does not match deno.json version " + denoVersion);
+            }
+          '
+
+      - name: Verify JSR package
+        run: deno publish --dry-run
+
+      - name: Verify Deno runtime
+        run: |
+          deno eval '
+            import { evaluateExpression } from "./mod.ts";
+            const result = evaluateExpression("1 + 2");
+            if (!result.success || result.value !== 3) Deno.exit(1);
+          '
+
+  benchmark:
+    runs-on: ubuntu-latest
+    outputs:
+      performance: ${{ steps.performance.outcome }}
+    env:
+      BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+
+    steps:
+      - name: Checkout head revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: current
+
+      - name: Checkout base revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.BASE_SHA }}
+          path: baseline
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Pin comparison tooling to baseline
+        shell: bash
+        run: |
+          if [[ ! -f baseline/package.json ]]; then
+            cp current/package.json current/bun.lock baseline/
+            cp current/bench/comparison.bench.ts baseline/bench/
+          else
+            cp baseline/bench/comparison.bench.ts current/bench/
+            cp baseline/scripts/benchmark-report.ts current/scripts/
+          fi
+
+      - name: Install head dependencies
+        working-directory: current
+        run: bun install --frozen-lockfile
+
+      - name: Install base dependencies
+        working-directory: baseline
+        run: bun install --frozen-lockfile
+
+      - name: Pin benchmark runner to baseline
+        shell: bash
+        run: |
+          rm -rf current/node_modules/mitata
+          cp -R baseline/node_modules/mitata current/node_modules/mitata
+
+      - name: Compare benchmark performance
+        id: performance
+        continue-on-error: true
+        run: |
+          mkdir -p benchmark-results/base benchmark-results/head
+          trap 'test -f benchmark-results/report.md || printf "## Performance\n\nBenchmark execution failed. See the workflow logs.\n" > benchmark-results/report.md' ERR
+
+          for run in 1 2 3; do
+            (cd baseline && bun run bench/comparison.bench.ts --json) > "benchmark-results/base/${run}.json"
+            (cd current && bun run bench/comparison.bench.ts --json) > "benchmark-results/head/${run}.json"
+          done
+
+          bun run current/scripts/benchmark-report.ts \
+            --baseline benchmark-results/base \
+            --current benchmark-results/head \
+            --output benchmark-results/report.md \
+            --threshold 15
+
+      - name: Add benchmark job summary
+        if: always()
+        run: cat benchmark-results/report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload benchmark report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: benchmark-report
+          path: benchmark-results/report.md
+
+      - name: Enforce benchmark result
+        if: always() && steps.performance.outcome != 'success'
+        run: exit 1
+
+  report:
+    if: always() && github.event_name == 'pull_request'
+    needs: [quality, npm-compat, jsr, benchmark]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Download benchmark report
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: benchmark-report
+          path: benchmark-report
+
+      - name: Build CI summary
+        env:
+          FORMATTING: ${{ needs.quality.outputs.formatting }}
+          LINT: ${{ needs.quality.outputs.lint }}
+          TYPES: ${{ needs.quality.outputs.types }}
+          TESTS: ${{ needs.quality.outputs.tests }}
+          BENCHMARK_VERIFICATION: ${{ needs.quality.outputs.benchmark_verification }}
+          PACKAGE: ${{ needs.quality.outputs.package }}
+          RUNTIME: ${{ needs.quality.outputs.runtime }}
+          NPM_COMPAT: ${{ needs.npm-compat.result }}
+          JSR: ${{ needs.jsr.result }}
+          PERFORMANCE: ${{ needs.benchmark.outputs.performance }}
+        run: |
+          status() {
+            if [[ "$1" == "success" ]]; then
+              printf "Passed"
+            else
+              printf "Failed"
+            fi
+          }
+
+          {
+            printf "## CI results\n\n"
+            printf "| Check | Result |\n"
+            printf "| --- | :---: |\n"
+            printf "| Formatting | %s |\n" "$(status "$FORMATTING")"
+            printf "| Lint | %s |\n" "$(status "$LINT")"
+            printf "| Types | %s |\n" "$(status "$TYPES")"
+            printf "| Tests | %s |\n" "$(status "$TESTS")"
+            printf "| Benchmark correctness | %s |\n" "$(status "$BENCHMARK_VERIFICATION")"
+            printf "| Package | %s |\n" "$(status "$PACKAGE")"
+            printf "| Bun runtime | %s |\n" "$(status "$RUNTIME")"
+            printf "| Node 24/26 | %s |\n" "$(status "$NPM_COMPAT")"
+            printf "| JSR | %s |\n" "$(status "$JSR")"
+            printf "| Performance | %s |\n\n" "$(status "$PERFORMANCE")"
+          } > ci-report.md
+
+          if [[ -f benchmark-report/report.md ]]; then
+            cat benchmark-report/report.md >> ci-report.md
+          else
+            printf "## Performance\n\nNo benchmark report was produced.\n" >> ci-report.md
+          fi
+
+          cat ci-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post PR summary
+        if: github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]'
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
+        with:
+          header: ci-results
+          path: ci-report.md
+          skip_unchanged: true
+
+      - name: Enforce CI result
+        if: always()
+        env:
+          QUALITY: ${{ needs.quality.result }}
+          NPM_COMPAT: ${{ needs.npm-compat.result }}
+          JSR: ${{ needs.jsr.result }}
+          BENCHMARK: ${{ needs.benchmark.result }}
+        run: |
+          for result in "$QUALITY" "$NPM_COMPAT" "$JSR" "$BENCHMARK"; do
+            if [[ "$result" != "success" ]]; then
+              exit 1
+            fi
+          done

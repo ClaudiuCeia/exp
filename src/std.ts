@@ -90,6 +90,5 @@ const stdValues: Record<string, RuntimeValue> = Object.assign(
   } satisfies Record<string, RuntimeValue>,
 );
 
-export const std: Readonly<Record<string, RuntimeValue>> = Object.freeze(
-  stdValues,
-);
+export const std: Readonly<Record<string, RuntimeValue>> =
+  Object.freeze(stdValues);

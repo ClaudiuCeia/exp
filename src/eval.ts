@@ -73,7 +73,7 @@ export class ExpEvalError extends Error {
   readonly span?: Span;
   /** Step counter at the time of failure (useful with budgets). */
   readonly steps?: number;
-  /** Byte index into input when the failure originated from parsing. */
+  /** UTF-16 code-unit index when the failure originated from parsing. */
   readonly index?: number;
 
   /** Create an `ExpEvalError` from an `EvalError` payload. */
@@ -103,11 +103,7 @@ type Ctx = {
   unknownIdentifier: "error" | "undefined";
 };
 
-const FORBIDDEN_MEMBERS = new Set([
-  "__proto__",
-  "prototype",
-  "constructor",
-]);
+const FORBIDDEN_MEMBERS = new Set(["__proto__", "prototype", "constructor"]);
 
 const isTruthy = (v: RuntimeValue): boolean => {
   return !!v;
@@ -240,11 +236,7 @@ const evalIdentifierExpr = (expr: IdentifierExpr, ctx: Ctx): EvalResult => {
   if (ctx.unknownIdentifier === "undefined") {
     return { success: true, value: undefined };
   }
-  return evalError(
-    `unknown identifier '${expr.name}'`,
-    expr.span,
-    ctx.steps,
-  );
+  return evalError(`unknown identifier '${expr.name}'`, expr.span, ctx.steps);
 };
 
 const evalArrayExpr = (expr: ArrayExpr, ctx: Ctx): EvalResult => {
@@ -316,9 +308,10 @@ const evalBinaryExpr = (expr: BinaryExpr, ctx: Ctx): EvalResult => {
     case "+":
       return {
         success: true,
-        value: typeof a === "string" || typeof b === "string"
-          ? toString(a) + toString(b)
-          : toNumber(a) + toNumber(b),
+        value:
+          typeof a === "string" || typeof b === "string"
+            ? toString(a) + toString(b)
+            : toNumber(a) + toNumber(b),
       };
     case "-":
       return { success: true, value: toNumber(a) - toNumber(b) };
@@ -368,11 +361,7 @@ const evalCallExpr = (expr: CallExpr, ctx: Ctx): EvalResult => {
   }
 
   if (typeof fn !== "function") {
-    return evalError(
-      "attempted to call a non-function",
-      expr.span,
-      ctx.steps,
-    );
+    return evalError("attempted to call a non-function", expr.span, ctx.steps);
   }
 
   const args: RuntimeValue[] = [];
@@ -581,11 +570,12 @@ const validateAst = (
       ): AstValidationResult => {
         const field = readAstProperty(frame.value as object, property);
         if (!field.ok) return astValidationError(field.message);
-        const matches = type === "boolean"
-          ? typeof field.value === "boolean"
-          : type === "number"
-          ? typeof field.value === "number"
-          : typeof field.value === "string";
+        const matches =
+          type === "boolean"
+            ? typeof field.value === "boolean"
+            : type === "number"
+              ? typeof field.value === "number"
+              : typeof field.value === "string";
         if (!matches) {
           return astValidationError(`'${property}' must be a ${type}`);
         }
@@ -676,8 +666,8 @@ export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
     readEvaluationLimit(opts.maxRuntimeDepth, 64, "maxRuntimeDepth"),
     readEvaluationLimit(opts.maxRuntimeEntries, 10_000, "maxRuntimeEntries"),
   ] as const;
-  const limitError = limitValues.find((value): value is string =>
-    typeof value === "string"
+  const limitError = limitValues.find(
+    (value): value is string => typeof value === "string",
   );
   if (limitError !== undefined) {
     const error: EvalError = { message: limitError, steps: 0 };
@@ -758,9 +748,8 @@ export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
 }
 
 /** Options for `evaluateExpression` (includes all `EvalOptions`). */
-export type EvaluateExpressionOptions =
-  & EvalOptions
-  & Readonly<{
+export type EvaluateExpressionOptions = EvalOptions &
+  Readonly<{
     /** When true, throw on parse failure. Default: true */
     throwOnParseError?: boolean;
     /** Maximum parser input length in UTF-16 code units. Default: 100,000. */
