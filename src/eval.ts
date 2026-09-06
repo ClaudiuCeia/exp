@@ -6,6 +6,8 @@ import {
   isPlainObject,
   isRuntimeValue,
   normalizeEnv,
+  prepareEnv,
+  type Env,
   type RuntimePrimitive,
   type RuntimeValue,
 } from "./runtime.ts";
@@ -13,10 +15,19 @@ import {
 import { std } from "./std.ts";
 
 const WeakSetConstructor = WeakSet;
+const WeakMapConstructor = WeakMap;
 const weakSetHas = WeakSet.prototype.has;
 const weakSetAdd = WeakSet.prototype.add;
+const weakMapGet = WeakMap.prototype.get;
+const weakMapSet = WeakMap.prototype.set;
 const reflectApply = Reflect.apply;
 const numberIsSafeInteger = Number.isSafeInteger;
+const objectCreate = Object.create;
+const objectDefineProperty = Object.defineProperty;
+const objectEntries = Object.entries;
+const objectFreeze = Object.freeze;
+const objectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+const objectHasOwn = Object.hasOwn;
 
 const createContainerSet = (): WeakSet<object> =>
   new WeakSetConstructor<object>();
@@ -28,6 +39,41 @@ const containerSetAdd = (set: WeakSet<object>, container: object): void => {
   reflectApply(weakSetAdd, set, [container]);
 };
 
+declare const preparedEnvironmentBrand: unique symbol;
+
+/**
+ * An opaque, deeply frozen environment snapshot created by
+ * `prepareEnvironment` for reuse within the same module instance.
+ */
+export type PreparedEnvironment = Readonly<{
+  [preparedEnvironmentBrand]: "PreparedEnvironment";
+}>;
+
+type PreparedEnvironmentState = Readonly<{
+  env: Env;
+  containers: WeakSet<object>;
+  maxDepth: number;
+  entries: number;
+}>;
+
+const preparedEnvironmentPrototype = objectFreeze(objectCreate(null));
+const preparedEnvironments = new WeakMapConstructor<
+  object,
+  PreparedEnvironmentState
+>();
+
+const getPreparedEnvironment = (
+  value: object,
+): PreparedEnvironmentState | undefined =>
+  reflectApply(weakMapGet, preparedEnvironments, [value]);
+
+const setPreparedEnvironment = (
+  value: PreparedEnvironment,
+  state: PreparedEnvironmentState,
+): void => {
+  reflectApply(weakMapSet, preparedEnvironments, [value, state]);
+};
+
 /**
  * A candidate environment supplied for runtime validation and normalization.
  *
@@ -37,6 +83,14 @@ const containerSetAdd = (set: WeakSet<object>, container: object): void => {
  */
 export type EnvironmentInput = object;
 
+/** Runtime graph limits used while preparing an environment. */
+export type PrepareEnvironmentOptions = Readonly<{
+  /** Max nesting in the environment. Default: 64 */
+  maxRuntimeDepth?: number;
+  /** Max entries in the environment. Default: 10,000 */
+  maxRuntimeEntries?: number;
+}>;
+
 /** Options for `evaluateAst` and `evaluateExpression`. */
 export type EvalOptions = Readonly<{
   /**
@@ -44,9 +98,10 @@ export type EvalOptions = Readonly<{
    *
    * Identifiers resolve as `env[name]`.
    *
-   * The input is validated and normalized before each evaluation.
+   * Ordinary inputs are validated and normalized before each evaluation.
+   * Prepared environments receive a constant-time runtime-limit check instead.
    */
-  env?: EnvironmentInput | undefined;
+  env?: EnvironmentInput | PreparedEnvironment | undefined;
 
   /**
    * Max AST traversal work during validation and, separately, max nodes visited
@@ -123,6 +178,7 @@ export type EvalResult =
 type Ctx = {
   env: Record<string, RuntimeValue>;
   currentContainers: WeakSet<object>;
+  immutableContainers: WeakSet<object>;
   steps: number;
   maxSteps: number;
   depth: number;
@@ -137,6 +193,8 @@ type Ctx = {
 const FORBIDDEN_MEMBERS = new Set(["__proto__", "prototype", "constructor"]);
 const DEFAULT_MAX_ARRAY_ELEMENTS = 1_000;
 const DEFAULT_MAX_CALL_ARGUMENTS = DEFAULT_MAX_ARRAY_ELEMENTS;
+const DEFAULT_MAX_RUNTIME_DEPTH = 64;
+const DEFAULT_MAX_RUNTIME_ENTRIES = 10_000;
 const UNSUPPORTED_MEMBER_ERROR = "member is not a supported runtime value";
 
 const isRuntimeArray = (value: RuntimeValue): value is RuntimeValue[] => {
@@ -223,6 +281,80 @@ const readEvaluationLimit = (
     : `${name} must be a non-negative safe integer`;
 };
 
+/**
+ * Validate, normalize, and freeze an environment for repeated evaluation.
+ *
+ * The returned snapshot is opaque and can only be used by this module instance.
+ * Invalid inputs and limits throw `ExpEvalError`.
+ *
+ * @throws {ExpEvalError} When the input or a runtime graph limit is invalid.
+ */
+export function prepareEnvironment(
+  env: EnvironmentInput,
+  opts: PrepareEnvironmentOptions = {},
+): PreparedEnvironment {
+  const maxDepth = readEvaluationLimit(
+    opts.maxRuntimeDepth,
+    DEFAULT_MAX_RUNTIME_DEPTH,
+    "maxRuntimeDepth",
+  );
+  const maxEntries = readEvaluationLimit(
+    opts.maxRuntimeEntries,
+    DEFAULT_MAX_RUNTIME_ENTRIES,
+    "maxRuntimeEntries",
+  );
+  if (typeof maxDepth === "string") {
+    throw new ExpEvalError({ message: maxDepth, steps: 0 });
+  }
+  if (typeof maxEntries === "string") {
+    throw new ExpEvalError({ message: maxEntries, steps: 0 });
+  }
+
+  const normalized = prepareEnv(env, {
+    maxDepth,
+    maxEntries,
+  });
+  if (!normalized.ok) {
+    throw new ExpEvalError({ message: normalized.message, steps: 0 });
+  }
+  if (objectHasOwn(normalized.env, "std")) {
+    throw new ExpEvalError({
+      message: "env['std'] is reserved (stdlib is always available as std.*)",
+      steps: 0,
+    });
+  }
+
+  const preparedEnv = objectCreate(null) as Env;
+  objectDefineProperty(preparedEnv, "std", {
+    value: std,
+    enumerable: true,
+    writable: false,
+    configurable: false,
+  });
+  for (const [key, value] of objectEntries(normalized.env)) {
+    objectDefineProperty(preparedEnv, key, {
+      value,
+      enumerable: true,
+      writable: false,
+      configurable: false,
+    });
+  }
+  objectFreeze(preparedEnv);
+  containerSetAdd(normalized.containers, preparedEnv);
+  containerSetAdd(normalized.containers, std);
+
+  const prepared = objectFreeze(
+    objectCreate(preparedEnvironmentPrototype),
+  ) as PreparedEnvironment;
+  setPreparedEnvironment(prepared, {
+    env: preparedEnv,
+    containers: normalized.containers,
+    maxDepth: normalized.maxDepth,
+    entries: normalized.entries,
+  });
+  return prepared;
+}
+
 const bump = (ctx: Ctx, span?: Span): EvalResult | null => {
   ctx.steps++;
   if (ctx.steps > ctx.maxSteps) {
@@ -239,13 +371,16 @@ const getMember = (obj: RuntimeValue, prop: string, ctx: Ctx): RuntimeValue => {
   const ownerIsContainer = obj !== null && typeof obj === "object";
   const ownerWasCurrent =
     ownerIsContainer && containerSetHas(ctx.currentContainers, obj);
-  if (ownerIsContainer && !ownerWasCurrent) {
+  const ownerIsImmutable =
+    ownerIsContainer && containerSetHas(ctx.immutableContainers, obj);
+  const ownerIsTrusted = ownerWasCurrent || ownerIsImmutable;
+  if (ownerIsContainer && !ownerIsTrusted) {
     ctx.currentContainers = createContainerSet();
   }
 
   if (isRuntimeArray(obj)) {
     if (prop !== "length") return undefined;
-    if (!ownerWasCurrent) {
+    if (!ownerIsTrusted) {
       if (
         !isRuntimeValue(obj, {
           maxDepth: ctx.maxRuntimeDepth,
@@ -258,7 +393,9 @@ const getMember = (obj: RuntimeValue, prop: string, ctx: Ctx): RuntimeValue => {
 
     let descriptor: PropertyDescriptor | undefined;
     try {
-      descriptor = Object.getOwnPropertyDescriptor(obj, "length");
+      descriptor = ownerIsImmutable
+        ? objectGetOwnPropertyDescriptor(obj, "length")
+        : Object.getOwnPropertyDescriptor(obj, "length");
     } catch {
       throw new Error(UNSUPPORTED_MEMBER_ERROR);
     }
@@ -270,7 +407,7 @@ const getMember = (obj: RuntimeValue, prop: string, ctx: Ctx): RuntimeValue => {
       typeof length !== "number" ||
       !numberIsSafeInteger(length) ||
       length < 0 ||
-      (!ownerWasCurrent && length > ctx.maxRuntimeEntries)
+      (!ownerIsTrusted && length > ctx.maxRuntimeEntries)
     ) {
       throw new Error(UNSUPPORTED_MEMBER_ERROR);
     }
@@ -278,14 +415,20 @@ const getMember = (obj: RuntimeValue, prop: string, ctx: Ctx): RuntimeValue => {
   }
 
   if (isPlainObject(obj)) {
-    const descriptor = Object.getOwnPropertyDescriptor(obj, prop);
+    const descriptor = ownerIsImmutable
+      ? objectGetOwnPropertyDescriptor(obj, prop)
+      : Object.getOwnPropertyDescriptor(obj, prop);
     if (descriptor === undefined || !descriptor.enumerable) return undefined;
     if (!("value" in descriptor)) {
       throw new Error("member must be an enumerable data property");
     }
     const value: unknown = descriptor.value;
     const isContainer = value !== null && typeof value === "object";
-    if (ownerWasCurrent) {
+    if (ownerIsImmutable) {
+      if (isContainer && !containerSetHas(ctx.immutableContainers, value)) {
+        throw new Error(UNSUPPORTED_MEMBER_ERROR);
+      }
+    } else if (ownerWasCurrent) {
       if (isContainer) containerSetAdd(ctx.currentContainers, value);
     } else {
       if (
@@ -871,8 +1014,16 @@ export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
       DEFAULT_MAX_CALL_ARGUMENTS,
       "maxCallArguments",
     ),
-    readEvaluationLimit(opts.maxRuntimeDepth, 64, "maxRuntimeDepth"),
-    readEvaluationLimit(opts.maxRuntimeEntries, 10_000, "maxRuntimeEntries"),
+    readEvaluationLimit(
+      opts.maxRuntimeDepth,
+      DEFAULT_MAX_RUNTIME_DEPTH,
+      "maxRuntimeDepth",
+    ),
+    readEvaluationLimit(
+      opts.maxRuntimeEntries,
+      DEFAULT_MAX_RUNTIME_ENTRIES,
+      "maxRuntimeEntries",
+    ),
   ] as const;
   const limitError = limitValues.find(
     (value): value is string => typeof value === "string",
@@ -908,48 +1059,84 @@ export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
   }
 
   const currentContainers = createContainerSet();
-  const envRes = normalizeEnv(opts.env as unknown, {
-    maxDepth: maxRuntimeDepth,
-    maxEntries: maxRuntimeEntries,
-  });
-  if (!envRes.ok) {
-    const e: EvalError = { message: envRes.message, steps: 0 };
-    if (throwOnError) throw new ExpEvalError(e);
-    return { success: false, error: e };
+  const prepared =
+    opts.env === undefined ? undefined : getPreparedEnvironment(opts.env);
+  if (prepared !== undefined && prepared.maxDepth > maxRuntimeDepth) {
+    const error: EvalError = {
+      message:
+        `prepared environment requires maxRuntimeDepth >= ${prepared.maxDepth}; ` +
+        `received ${maxRuntimeDepth}`,
+      steps: 0,
+    };
+    if (throwOnError) throw new ExpEvalError(error);
+    return { success: false, error };
+  }
+  if (prepared !== undefined && prepared.entries > maxRuntimeEntries) {
+    const error: EvalError = {
+      message:
+        `prepared environment requires maxRuntimeEntries >= ${prepared.entries}; ` +
+        `received ${maxRuntimeEntries}`,
+      steps: 0,
+    };
+    if (throwOnError) throw new ExpEvalError(error);
+    return { success: false, error };
+  }
+
+  const envRes =
+    prepared === undefined
+      ? normalizeEnv(opts.env as unknown, {
+          maxDepth: maxRuntimeDepth,
+          maxEntries: maxRuntimeEntries,
+        })
+      : undefined;
+  if (envRes !== undefined && !envRes.ok) {
+    const error: EvalError = { message: envRes.message, steps: 0 };
+    if (throwOnError) throw new ExpEvalError(error);
+    return { success: false, error };
   }
 
   let res: EvalResult;
   try {
-    if (Object.hasOwn(envRes.env, "std")) {
+    if (envRes !== undefined && Object.hasOwn(envRes.env, "std")) {
       res = evalError(
         "env['std'] is reserved (stdlib is always available as std.*)",
         undefined,
         0,
       );
     } else {
-      const env = Object.create(null) as Record<string, RuntimeValue>;
-      Object.defineProperty(env, "std", {
-        value: std,
-        enumerable: true,
-        writable: true,
-        configurable: true,
-      });
-      containerSetAdd(currentContainers, std);
-      for (const [k, v] of Object.entries(envRes.env)) {
-        Object.defineProperty(env, k, {
-          value: v,
+      const immutableContainers = prepared?.containers ?? createContainerSet();
+      let env: Env;
+      if (prepared !== undefined) {
+        env = prepared.env;
+      } else {
+        if (envRes === undefined) {
+          throw new Error("normalized environment is missing");
+        }
+        env = Object.create(null) as Env;
+        Object.defineProperty(env, "std", {
+          value: std,
           enumerable: true,
           writable: true,
           configurable: true,
         });
-        if (v !== null && typeof v === "object") {
-          containerSetAdd(currentContainers, v);
+        containerSetAdd(currentContainers, std);
+        for (const [key, value] of Object.entries(envRes.env)) {
+          Object.defineProperty(env, key, {
+            value,
+            enumerable: true,
+            writable: true,
+            configurable: true,
+          });
+          if (value !== null && typeof value === "object") {
+            containerSetAdd(currentContainers, value);
+          }
         }
       }
 
       const ctx: Ctx = {
         env,
         currentContainers,
+        immutableContainers,
         steps: 0,
         maxSteps,
         depth: 0,

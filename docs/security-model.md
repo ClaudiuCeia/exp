@@ -36,10 +36,33 @@ that its runtime shape or values are supported.
 The runtime entry counter includes all own object keys before non-enumerable and
 symbol-keyed properties are ignored.
 
+### Prepared environments
+
+`prepareEnvironment()` validates and normalizes an environment once for reuse.
+The returned token is opaque, frozen, and accepted only by the package module
+instance that created it. Another live module instance rejects the token as a
+non-plain environment. Structured cloning strips its identity and produces an
+ordinary empty object with no bindings, so prepared tokens must not be cloned,
+serialized, or transferred.
+
+The normalized arrays and objects are library-owned and deeply frozen. The
+caller-owned input and function objects are never frozen or mutated. Aliases and
+cycles are preserved in the snapshot, while later changes to the input graph do
+not affect it.
+
+Evaluation compares its runtime limits with the exact graph requirements
+recorded during preparation without traversing the snapshot during setup. Every
+function return is independently traversed under the current evaluation limits,
+including a return that aliases a container in the snapshot.
+
 ## Environment functions
 
 Functions supplied through `env` are trusted host code. They run with the same
 authority as the application.
+
+When a prepared environment is used, object and array arguments and method
+receivers from its snapshot are frozen. Function identity and closure state
+remain live across evaluations.
 
 Environment functions can:
 
