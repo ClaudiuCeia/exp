@@ -41,4 +41,4 @@ export type {
   RuntimeValue,
 } from "./src/runtime.ts";
 
-export { std } from "./src/std.ts";
+export { std, type StandardLibrary } from "./src/std.ts";

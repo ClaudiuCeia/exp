@@ -15,11 +15,12 @@ const expectString = (v: RuntimeValue, name: string): string => {
  *
  * Deterministic, side-effect-free helpers only.
  */
-const stdValues: Record<string, RuntimeValue> = Object.assign(
-  Object.create(null),
+const stdValues = Object.assign(
+  // `object` preserves the literal keys instead of adding an index signature.
+  Object.create(null) as object,
   {
     // Length helper.
-    len: (x: RuntimeValue): RuntimeValue => {
+    len: (x: RuntimeValue) => {
       if (typeof x === "string" || Array.isArray(x)) return x.length;
       throw new Error("std.len(x) expects a string or array");
     },
@@ -87,12 +88,14 @@ const stdValues: Record<string, RuntimeValue> = Object.assign(
       const b = expectNumber(end, "std.slice(s,start,end?)");
       return str.slice(a, b);
     },
-  } satisfies Record<string, RuntimeValue>,
+  } as const satisfies Record<string, RuntimeValue>,
 );
+
+/** Exact public shape of the built-in standard library. */
+export type StandardLibrary = Readonly<typeof stdValues>;
 
 for (const value of Object.values(stdValues)) {
   if (typeof value === "function") Object.freeze(value);
 }
 
-export const std: Readonly<Record<string, RuntimeValue>> =
-  Object.freeze(stdValues);
+export const std: StandardLibrary = Object.freeze(stdValues);
