@@ -76,6 +76,72 @@ test("isRuntimeValue does not invoke runtime clone constructors", () => {
   assertEquals(result, true);
 });
 
+test("isRuntimeValue uses captured cycle-detection methods", () => {
+  const hasDescriptor = Object.getOwnPropertyDescriptor(
+    WeakSet.prototype,
+    "has",
+  );
+  if (hasDescriptor === undefined) {
+    throw new Error("missing WeakSet.prototype.has");
+  }
+  const target: Record<string, unknown> = { child: new Date() };
+  const value = new Proxy(target, {
+    getOwnPropertyDescriptor(object, property) {
+      if (property === "child") {
+        Object.defineProperty(WeakSet.prototype, "has", {
+          ...hasDescriptor,
+          value: () => true,
+        });
+      }
+      return Reflect.getOwnPropertyDescriptor(object, property);
+    },
+  });
+  let accepted = true;
+
+  try {
+    accepted = isRuntimeValue(value);
+  } finally {
+    Object.defineProperty(WeakSet.prototype, "has", hasDescriptor);
+  }
+
+  assertEquals(accepted, false);
+});
+
+test("normalizeEnv uses captured alias-detection methods", () => {
+  const getDescriptor = Object.getOwnPropertyDescriptor(
+    WeakMap.prototype,
+    "get",
+  );
+  if (getDescriptor === undefined) {
+    throw new Error("missing WeakMap.prototype.get");
+  }
+  const target: Record<string, unknown> = { child: new Date() };
+  const env = new Proxy(target, {
+    getOwnPropertyDescriptor(object, property) {
+      if (property === "child") {
+        Object.defineProperty(WeakMap.prototype, "get", {
+          ...getDescriptor,
+          value: () => [],
+        });
+      }
+      return Reflect.getOwnPropertyDescriptor(object, property);
+    },
+  });
+  let result: ReturnType<typeof normalizeEnv> | undefined;
+
+  try {
+    result = normalizeEnv(env);
+  } finally {
+    Object.defineProperty(WeakMap.prototype, "get", getDescriptor);
+  }
+
+  if (result === undefined) throw new Error("normalization did not return");
+  assertEquals(result, {
+    ok: false,
+    message: "env['child'] is not a supported runtime value",
+  });
+});
+
 test("normalizeEnv traverses after stack methods are poisoned", () => {
   const pushDescriptor = Object.getOwnPropertyDescriptor(
     Array.prototype,

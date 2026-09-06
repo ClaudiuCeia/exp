@@ -40,6 +40,34 @@ export type RuntimeValueLimits = Readonly<{
   maxEntries: number;
 }>;
 
+const WeakSetConstructor = WeakSet;
+const WeakMapConstructor = WeakMap;
+const weakSetHas = WeakSet.prototype.has;
+const weakSetAdd = WeakSet.prototype.add;
+const weakMapGet = WeakMap.prototype.get;
+const weakMapSet = WeakMap.prototype.set;
+const reflectApply = Reflect.apply;
+
+const seenSetHas = (set: WeakSet<object>, value: object): boolean =>
+  reflectApply(weakSetHas, set, [value]);
+
+const seenSetAdd = (set: WeakSet<object>, value: object): void => {
+  reflectApply(weakSetAdd, set, [value]);
+};
+
+const seenMapGet = (
+  map: WeakMap<object, RuntimeValue>,
+  value: object,
+): RuntimeValue | undefined => reflectApply(weakMapGet, map, [value]);
+
+const seenMapSet = (
+  map: WeakMap<object, RuntimeValue>,
+  value: object,
+  normalized: RuntimeValue,
+): void => {
+  reflectApply(weakMapSet, map, [value, normalized]);
+};
+
 type TraversalOk = Readonly<{ ok: true; value: RuntimeValue }>;
 type TraversalErr = Readonly<{ ok: false; message: string }>;
 type TraversalResult = TraversalOk | TraversalErr;
@@ -198,10 +226,10 @@ const traverseRuntimeValue = (
 
       let alreadySeen = false;
       if (state.mode === "validate") {
-        alreadySeen = state.seen.has(currentValue);
-        if (!alreadySeen) state.seen.add(currentValue);
+        alreadySeen = seenSetHas(state.seen, currentValue);
+        if (!alreadySeen) seenSetAdd(state.seen, currentValue);
       } else {
-        const seen = state.seen.get(currentValue);
+        const seen = seenMapGet(state.seen, currentValue);
         if (seen !== undefined) {
           assignNormalized(currentTarget, seen);
           alreadySeen = true;
@@ -228,7 +256,7 @@ const traverseRuntimeValue = (
 
           if (state.mode === "normalize") {
             const output: RuntimeArray = Array.from({ length });
-            state.seen.set(currentValue, output);
+            seenMapSet(state.seen, currentValue, output);
             topFrame = {
               kind: "array",
               mode: "normalize",
@@ -264,7 +292,7 @@ const traverseRuntimeValue = (
           let output: RuntimeObject | undefined;
           if (state.mode === "normalize") {
             output = Object.create(null) as RuntimeObject;
-            state.seen.set(currentValue, output);
+            seenMapSet(state.seen, currentValue, output);
           }
           const descriptors = Object.getOwnPropertyDescriptors(currentValue);
           const counted = consumeEntries(
@@ -428,7 +456,7 @@ export const isRuntimeValue = (
       entries: 0,
       limits,
       mode: "validate",
-      seen: new WeakSet(),
+      seen: new WeakSetConstructor(),
     }).ok;
   } catch {
     return false;
@@ -452,7 +480,7 @@ export const normalizeEnv = (
       entries: 0,
       limits,
       mode: "normalize",
-      seen: new WeakMap(),
+      seen: new WeakMapConstructor(),
     });
     if (!normalized.ok) return normalized;
     return { ok: true, env: normalized.value as Env };
