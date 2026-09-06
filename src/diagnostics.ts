@@ -130,9 +130,12 @@ export const formatDiagnosticReport = (
   const contextLines = opts.contextLines ?? 0;
   const tabWidth = opts.tabWidth ?? 2;
 
-  const index = typeof diag.index === "number"
-    ? diag.index
-    : (diag.span ? diag.span.start : 0);
+  const index =
+    typeof diag.index === "number"
+      ? diag.index
+      : diag.span
+        ? diag.span.start
+        : 0;
 
   const lines = splitLines(input);
   const info = findLineInfo(input, index);
@@ -177,9 +180,9 @@ export const formatDiagnosticReport = (
           const hi = Math.max(startPos, endPos);
           const width = Math.max(1, hi - lo + 1);
 
-          const underline = `${gutter} | ${" ".repeat(lo)}╰${
-            "─".repeat(Math.max(0, width - 2))
-          }╯`;
+          const underline = `${gutter} | ${" ".repeat(lo)}╰${"─".repeat(
+            Math.max(0, width - 2),
+          )}╯`;
 
           // Arrow originates from the center of the underline.
           const center = lo + Math.floor(width / 2);

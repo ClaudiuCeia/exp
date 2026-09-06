@@ -1,0 +1,77 @@
+{
+  "name": "@claudiu-ceia/exp",
+  "version": "0.2.0",
+  "description": "Small, deterministic expression language toolkit with safe evaluation and rich diagnostics.",
+  "keywords": [
+    "ast",
+    "dsl",
+    "expression",
+    "interpreter",
+    "parser",
+    "safe-evaluation",
+    "typescript"
+  ],
+  "homepage": "https://github.com/ClaudiuCeia/exp#readme",
+  "bugs": {
+    "url": "https://github.com/ClaudiuCeia/exp/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ClaudiuCeia/exp.git"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "types": "./dist/mod.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/mod.d.ts",
+      "import": "./dist/mod.js"
+    }
+  },
+  "scripts": {
+    "check": "bun run format:check && bun run lint && bun run typecheck && bun run test && bun run bench:verify",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
+    "lint": "oxlint --deny-warnings .",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test ./tests",
+    "coverage": "bun test --coverage ./tests",
+    "build": "rm -rf dist && tsc --project tsconfig.build.json",
+    "package:check": "bun run build && publint && attw --pack . --profile esm-only",
+    "prepack": "bun run build",
+    "bench": "bun run bench/parse.bench.ts && bun run bench/eval.bench.ts",
+    "bench:comparison": "bun run bench/comparison.bench.ts",
+    "bench:comparison:json": "bun run bench/comparison.bench.ts --json",
+    "bench:compare": "bun run scripts/benchmark-report.ts",
+    "bench:parse": "bun run bench/parse.bench.ts",
+    "bench:eval": "bun run bench/eval.bench.ts",
+    "bench:verify": "bun run bench/comparison.bench.ts --verify",
+    "exp": "bun run cli/exp.ts",
+    "repl": "bun run exp -- repl",
+    "hooks:install": "ln -sf ../../scripts/pre-commit .git/hooks/pre-commit && chmod +x scripts/pre-commit",
+    "hooks:uninstall": "rm -f .git/hooks/pre-commit"
+  },
+  "dependencies": {
+    "@claudiu-ceia/combine": "^0.11.0"
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "0.18.5",
+    "@stricli/core": "1.3.0",
+    "@types/bun": "1.4.1",
+    "mitata": "1.0.34",
+    "oxfmt": "0.66.0",
+    "oxlint": "1.81.0",
+    "publint": "0.3.24",
+    "typescript": "~7.0.0"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "bun@1.4.0"
+}

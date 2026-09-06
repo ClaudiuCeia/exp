@@ -120,9 +120,7 @@ const validateValue = (
         };
       }
 
-      const v = d && ("value" in d)
-        ? (d as { value: unknown }).value
-        : undefined;
+      const v = d && "value" in d ? (d as { value: unknown }).value : undefined;
       const r = validateValue(v, `${path}[${i}]`, depth + 1, state);
       if (!r.ok) return r;
     }
@@ -202,7 +200,7 @@ const normalizeRuntimeValue = (
     const len = (lenDesc as { value: number }).value;
     const counted = consumeEntries(state, len, path);
     if (!counted.ok) return counted;
-    const out: RuntimeValue[] = new Array(len);
+    const out: RuntimeValue[] = Array.from({ length: len });
     state.seen.set(value, out);
     for (let i = 0; i < len; i++) {
       const d = Object.getOwnPropertyDescriptor(value, String(i));
@@ -212,9 +210,7 @@ const normalizeRuntimeValue = (
           message: `${path}[${i}] must be a data property`,
         };
       }
-      const v = d && ("value" in d)
-        ? (d as { value: unknown }).value
-        : undefined;
+      const v = d && "value" in d ? (d as { value: unknown }).value : undefined;
       const nr = normalizeRuntimeValue(v, `${path}[${i}]`, depth + 1, state);
       if (!nr.ok) return nr;
       out[i] = nr.value;

@@ -1,23 +1,24 @@
-import { assertEquals, assertMatch, assertThrows } from "@std/assert";
+import { test } from "bun:test";
+import { assertEquals, assertMatch, assertThrows } from "./assert.ts";
 import type { Expr } from "../src/ast/mod.ts";
 import { evaluateAst, evaluateExpression, ExpEvalError } from "../src/eval.ts";
 import type { RuntimeValue } from "../src/runtime.ts";
 
-Deno.test("evaluateExpression evaluates arithmetic", () => {
+test("evaluateExpression evaluates arithmetic", () => {
   const res = evaluateExpression("1 + 2 * 3", { throwOnError: false });
   assertEquals(res.success, true);
   if (!res.success) return;
   assertEquals(res.value, 7);
 });
 
-Deno.test("evaluateExpression handles unary ops", () => {
+test("evaluateExpression handles unary ops", () => {
   const res = evaluateExpression("!false || -1 < +2", { throwOnError: false });
   assertEquals(res.success, true);
   if (!res.success) return;
   assertEquals(res.value, true);
 });
 
-Deno.test("evaluateExpression supports string concatenation", () => {
+test("evaluateExpression supports string concatenation", () => {
   const res = evaluateExpression("'a' + 1 + true + null + undefined", {
     throwOnError: false,
   });
@@ -26,14 +27,14 @@ Deno.test("evaluateExpression supports string concatenation", () => {
   assertEquals(res.value, "a1truenullundefined");
 });
 
-Deno.test("evaluateExpression parses undefined as a literal", () => {
+test("evaluateExpression parses undefined as a literal", () => {
   const res = evaluateExpression("undefined", { throwOnError: false });
   assertEquals(res.success, true);
   if (!res.success) return;
   assertEquals(res.value, undefined);
 });
 
-Deno.test("evaluateExpression supports nullish coalescing (??)", () => {
+test("evaluateExpression supports nullish coalescing (??)", () => {
   const a = evaluateExpression("null ?? 1", { throwOnError: false });
   assertEquals(a.success, true);
   if (!a.success) return;
@@ -50,7 +51,7 @@ Deno.test("evaluateExpression supports nullish coalescing (??)", () => {
   assertEquals(c.value, 0);
 });
 
-Deno.test("evaluateExpression nullish coalescing is lazy", () => {
+test("evaluateExpression nullish coalescing is lazy", () => {
   let called = 0;
   const res = evaluateExpression("0 ?? boom()", {
     throwOnError: false,
@@ -67,7 +68,7 @@ Deno.test("evaluateExpression nullish coalescing is lazy", () => {
   assertEquals(called, 0);
 });
 
-Deno.test("evaluateExpression supports all numeric binary operators", () => {
+test("evaluateExpression supports all numeric binary operators", () => {
   const res = evaluateExpression(
     "10 - 3 == 7 && 2 * 3 == 6 && 8 / 2 == 4 && 9 % 4 == 1",
     { throwOnError: false },
@@ -77,7 +78,7 @@ Deno.test("evaluateExpression supports all numeric binary operators", () => {
   assertEquals(res.value, true);
 });
 
-Deno.test("evaluateExpression supports comparison operators", () => {
+test("evaluateExpression supports comparison operators", () => {
   const res = evaluateExpression(
     "1 < 2 && 2 <= 2 && 3 > 2 && 3 >= 3 && (1 != 2) && (1 == 1)",
     { throwOnError: false },
@@ -87,7 +88,7 @@ Deno.test("evaluateExpression supports comparison operators", () => {
   assertEquals(res.value, true);
 });
 
-Deno.test("evaluateExpression does not coerce objects for == / !=", () => {
+test("evaluateExpression does not coerce objects for == / !=", () => {
   const res1 = evaluateExpression("obj == '[object Object]'", {
     throwOnError: false,
     env: { obj: {} },
@@ -105,7 +106,7 @@ Deno.test("evaluateExpression does not coerce objects for == / !=", () => {
   assertEquals(res2.value, false);
 });
 
-Deno.test("evaluateExpression supports toNumber conversions", () => {
+test("evaluateExpression supports toNumber conversions", () => {
   const res1 = evaluateExpression("+true + +false + +null", {
     throwOnError: false,
   });
@@ -137,21 +138,21 @@ Deno.test("evaluateExpression supports toNumber conversions", () => {
   assertEquals(res3.value, 42);
 });
 
-Deno.test("evaluateExpression errors when numeric ops see non-primitives", () => {
+test("evaluateExpression errors when numeric ops see non-primitives", () => {
   const res = evaluateExpression("+[1]", { throwOnError: false });
   assertEquals(res.success, false);
   if (res.success) return;
   assertMatch(res.error.message, /expected primitive/);
 });
 
-Deno.test("evaluateExpression errors when string concat sees non-primitives", () => {
+test("evaluateExpression errors when string concat sees non-primitives", () => {
   const res = evaluateExpression("'x' + [1]", { throwOnError: false });
   assertEquals(res.success, false);
   if (res.success) return;
   assertMatch(res.error.message, /expected primitive/);
 });
 
-Deno.test("evaluateExpression resolves identifiers + member access", () => {
+test("evaluateExpression resolves identifiers + member access", () => {
   const res = evaluateExpression("user.plan", {
     throwOnError: false,
     env: {
@@ -163,7 +164,7 @@ Deno.test("evaluateExpression resolves identifiers + member access", () => {
   assertEquals(res.value, "free");
 });
 
-Deno.test("evaluateExpression member access works on arrays (length only)", () => {
+test("evaluateExpression member access works on arrays (length only)", () => {
   const res1 = evaluateExpression("xs.length", {
     throwOnError: false,
     env: { xs: [1, 2, 3] },
@@ -181,7 +182,7 @@ Deno.test("evaluateExpression member access works on arrays (length only)", () =
   assertEquals(res2.value, undefined);
 });
 
-Deno.test("evaluateExpression member access works on proto-null objects", () => {
+test("evaluateExpression member access works on proto-null objects", () => {
   const obj = Object.assign(Object.create(null), { a: 1 });
   const res = evaluateExpression("obj.a", {
     throwOnError: false,
@@ -192,7 +193,7 @@ Deno.test("evaluateExpression member access works on proto-null objects", () => 
   assertEquals(res.value, 1);
 });
 
-Deno.test("evaluateExpression does not expose inherited env properties", () => {
+test("evaluateExpression does not expose inherited env properties", () => {
   const res = evaluateExpression("toString", {
     throwOnError: false,
     env: {},
@@ -203,7 +204,7 @@ Deno.test("evaluateExpression does not expose inherited env properties", () => {
   assertEquals(res.value, undefined);
 });
 
-Deno.test("evaluateExpression does not expose inherited member properties", () => {
+test("evaluateExpression does not expose inherited member properties", () => {
   const res = evaluateExpression("obj.toString", {
     throwOnError: false,
     env: { obj: {} },
@@ -213,12 +214,12 @@ Deno.test("evaluateExpression does not expose inherited member properties", () =
   assertEquals(res.value, undefined);
 });
 
-Deno.test("evaluateExpression errors by default on missing identifiers", () => {
+test("evaluateExpression errors by default on missing identifiers", () => {
   const res = evaluateExpression("missing", { throwOnError: false });
   assertEquals(res.success, false);
 });
 
-Deno.test("evaluateExpression can treat missing identifiers as undefined", () => {
+test("evaluateExpression can treat missing identifiers as undefined", () => {
   const res = evaluateExpression("missing", {
     throwOnError: false,
     unknownIdentifier: "undefined",
@@ -228,7 +229,7 @@ Deno.test("evaluateExpression can treat missing identifiers as undefined", () =>
   assertEquals(res.value, undefined);
 });
 
-Deno.test("evaluateExpression can call allow-listed functions", () => {
+test("evaluateExpression can call allow-listed functions", () => {
   const res = evaluateExpression("inc(41)", {
     throwOnError: false,
     env: {
@@ -240,13 +241,12 @@ Deno.test("evaluateExpression can call allow-listed functions", () => {
   assertEquals(res.value, 42);
 });
 
-Deno.test("evaluateExpression binds receiver for member calls", () => {
+test("evaluateExpression binds receiver for member calls", () => {
   const user = {
     name: "Ada",
     getName: function (this: unknown) {
       if (typeof this === "object" && this !== null && "name" in this) {
-        // deno-lint-ignore no-explicit-any
-        return (this as any).name;
+        return (this as Record<"name", RuntimeValue>).name;
       }
       return "bad";
     },
@@ -261,14 +261,14 @@ Deno.test("evaluateExpression binds receiver for member calls", () => {
   assertEquals(res.value, "Ada");
 });
 
-Deno.test("evaluateExpression errors when calling non-functions", () => {
+test("evaluateExpression errors when calling non-functions", () => {
   const res = evaluateExpression("1(2)", { throwOnError: false });
   assertEquals(res.success, false);
   if (res.success) return;
   assertMatch(res.error.message, /non-function/);
 });
 
-Deno.test("evaluateExpression catches env function exceptions", () => {
+test("evaluateExpression catches env function exceptions", () => {
   const res = evaluateExpression("boom()", {
     throwOnError: false,
     env: {
@@ -282,7 +282,7 @@ Deno.test("evaluateExpression catches env function exceptions", () => {
   assertMatch(res.error.message, /kaboom/);
 });
 
-Deno.test("evaluateExpression rejects unsupported function return values", () => {
+test("evaluateExpression rejects unsupported function return values", () => {
   const res = evaluateExpression("f()", {
     throwOnError: false,
     env: {
@@ -295,7 +295,7 @@ Deno.test("evaluateExpression rejects unsupported function return values", () =>
   assertMatch(res.error.message, /unsupported value/);
 });
 
-Deno.test("evaluateExpression does not expose hidden function return values", () => {
+test("evaluateExpression does not expose hidden function return values", () => {
   const value = Object.create(null);
   Object.defineProperty(value, "secret", {
     value: new Date(),
@@ -312,7 +312,7 @@ Deno.test("evaluateExpression does not expose hidden function return values", ()
   assertEquals(res.value, undefined);
 });
 
-Deno.test("evaluateExpression does not invoke hidden function return getters", () => {
+test("evaluateExpression does not invoke hidden function return getters", () => {
   let called = 0;
   const value = Object.create(null);
   Object.defineProperty(value, "secret", {
@@ -334,7 +334,7 @@ Deno.test("evaluateExpression does not invoke hidden function return getters", (
   assertEquals(res.value, undefined);
 });
 
-Deno.test("evaluateExpression rejects returned accessors without invoking them", () => {
+test("evaluateExpression rejects returned accessors without invoking them", () => {
   let called = 0;
   const value = Object.create(null);
   Object.defineProperty(value, "secret", {
@@ -356,7 +356,7 @@ Deno.test("evaluateExpression rejects returned accessors without invoking them",
   assertMatch(res.error.message, /unsupported value/);
 });
 
-Deno.test("evaluateExpression rejects unsupported env values", () => {
+test("evaluateExpression rejects unsupported env values", () => {
   assertThrows(() => {
     evaluateExpression("x", {
       throwOnError: true,
@@ -375,82 +375,73 @@ Deno.test("evaluateExpression rejects unsupported env values", () => {
   assertMatch(res.error.message, /env\['x'\] is not a supported runtime value/);
 });
 
-Deno.test(
-  "evaluateExpression rejects env accessor properties without invoking them",
-  () => {
-    let called = 0;
-    const env: Record<string, unknown> = {};
-    Object.defineProperty(env, "x", {
-      enumerable: true,
-      get() {
-        called++;
-        throw new Error("getter ran");
-      },
-    });
+test("evaluateExpression rejects env accessor properties without invoking them", () => {
+  let called = 0;
+  const env: Record<string, unknown> = {};
+  Object.defineProperty(env, "x", {
+    enumerable: true,
+    get() {
+      called++;
+      throw new Error("getter ran");
+    },
+  });
 
-    const res = evaluateExpression("x", {
-      throwOnError: false,
-      env: env as unknown as Record<string, RuntimeValue>,
-    });
+  const res = evaluateExpression("x", {
+    throwOnError: false,
+    env: env as unknown as Record<string, RuntimeValue>,
+  });
 
-    assertEquals(res.success, false);
-    assertEquals(called, 0);
-    if (res.success) return;
-    assertMatch(res.error.message, /data property/);
-  },
-);
+  assertEquals(res.success, false);
+  assertEquals(called, 0);
+  if (res.success) return;
+  assertMatch(res.error.message, /data property/);
+});
 
-Deno.test(
-  "evaluateExpression rejects nested accessor properties without invoking them",
-  () => {
-    let called = 0;
-    const user: Record<string, unknown> = {};
-    Object.defineProperty(user, "plan", {
-      enumerable: true,
-      get() {
-        called++;
-        throw new Error("getter ran");
-      },
-    });
+test("evaluateExpression rejects nested accessor properties without invoking them", () => {
+  let called = 0;
+  const user: Record<string, unknown> = {};
+  Object.defineProperty(user, "plan", {
+    enumerable: true,
+    get() {
+      called++;
+      throw new Error("getter ran");
+    },
+  });
 
-    const res = evaluateExpression("user.plan", {
-      throwOnError: false,
-      env: { user } as unknown as Record<string, RuntimeValue>,
-    });
+  const res = evaluateExpression("user.plan", {
+    throwOnError: false,
+    env: { user } as unknown as Record<string, RuntimeValue>,
+  });
 
-    assertEquals(res.success, false);
-    assertEquals(called, 0);
-    if (res.success) return;
-    assertMatch(res.error.message, /data property/);
-  },
-);
+  assertEquals(res.success, false);
+  assertEquals(called, 0);
+  if (res.success) return;
+  assertMatch(res.error.message, /data property/);
+});
 
-Deno.test(
-  "evaluateExpression rejects array index accessor properties without invoking them",
-  () => {
-    let called = 0;
-    const xs: unknown[] = [1];
-    Object.defineProperty(xs, "0", {
-      enumerable: true,
-      get() {
-        called++;
-        throw new Error("getter ran");
-      },
-    });
+test("evaluateExpression rejects array index accessor properties without invoking them", () => {
+  let called = 0;
+  const xs: unknown[] = [1];
+  Object.defineProperty(xs, "0", {
+    enumerable: true,
+    get() {
+      called++;
+      throw new Error("getter ran");
+    },
+  });
 
-    const res = evaluateExpression("xs.length", {
-      throwOnError: false,
-      env: { xs } as unknown as Record<string, RuntimeValue>,
-    });
+  const res = evaluateExpression("xs.length", {
+    throwOnError: false,
+    env: { xs } as unknown as Record<string, RuntimeValue>,
+  });
 
-    assertEquals(res.success, false);
-    assertEquals(called, 0);
-    if (res.success) return;
-    assertMatch(res.error.message, /data property/);
-  },
-);
+  assertEquals(res.success, false);
+  assertEquals(called, 0);
+  if (res.success) return;
+  assertMatch(res.error.message, /data property/);
+});
 
-Deno.test("evaluateExpression preserves shared environment references", () => {
+test("evaluateExpression preserves shared environment references", () => {
   const shared = { value: 1 };
   const direct = evaluateExpression("a == b", {
     throwOnError: false,
@@ -469,7 +460,7 @@ Deno.test("evaluateExpression preserves shared environment references", () => {
   assertEquals(nested.value, true);
 });
 
-Deno.test("evaluateExpression safely normalizes cyclic environments", () => {
+test("evaluateExpression safely normalizes cyclic environments", () => {
   const node: Record<string, RuntimeValue> = {};
   node.self = node;
   const objectResult = evaluateExpression("node.self == node", {
@@ -491,7 +482,7 @@ Deno.test("evaluateExpression safely normalizes cyclic environments", () => {
   assertEquals(arrayResult.value, true);
 });
 
-Deno.test("evaluateExpression rejects accessors in cyclic environments", () => {
+test("evaluateExpression rejects accessors in cyclic environments", () => {
   let called = 0;
   const node: Record<string, unknown> = {};
   node.self = node;
@@ -513,7 +504,7 @@ Deno.test("evaluateExpression rejects accessors in cyclic environments", () => {
   assertMatch(res.error.message, /data property/);
 });
 
-Deno.test("evaluateExpression bounds runtime value normalization", () => {
+test("evaluateExpression bounds runtime value normalization", () => {
   const nested = { child: { child: { value: 1 } } };
   const depthResult = evaluateExpression("nested.child", {
     throwOnError: false,
@@ -526,7 +517,7 @@ Deno.test("evaluateExpression bounds runtime value normalization", () => {
 
   const entriesResult = evaluateExpression("xs", {
     throwOnError: false,
-    env: { xs: new Array(100) },
+    env: { xs: Array.from({ length: 100 }) },
     maxRuntimeEntries: 10,
   });
   assertEquals(entriesResult.success, false);
@@ -534,7 +525,7 @@ Deno.test("evaluateExpression bounds runtime value normalization", () => {
   assertMatch(entriesResult.error.message, /runtime entry limit/);
 });
 
-Deno.test("evaluateExpression revalidates values after host mutation", () => {
+test("evaluateExpression revalidates values after host mutation", () => {
   const res = evaluateExpression("mutate(obj) + obj.secret", {
     throwOnError: false,
     env: {
@@ -555,7 +546,7 @@ Deno.test("evaluateExpression revalidates values after host mutation", () => {
   assertMatch(res.error.message, /not a supported runtime value/);
 });
 
-Deno.test("evaluateExpression validates cyclic function return values", () => {
+test("evaluateExpression validates cyclic function return values", () => {
   const value: Record<string, RuntimeValue> = {};
   value.self = value;
   const res = evaluateExpression("f().self == f().self", {
@@ -567,7 +558,7 @@ Deno.test("evaluateExpression validates cyclic function return values", () => {
   assertEquals(res.value, true);
 });
 
-Deno.test("evaluateExpression allows structured return values", () => {
+test("evaluateExpression allows structured return values", () => {
   const res = evaluateExpression("f().a + f().b.length", {
     throwOnError: false,
     env: {
@@ -579,7 +570,7 @@ Deno.test("evaluateExpression allows structured return values", () => {
   assertEquals(res.value, 42);
 });
 
-Deno.test("evaluateExpression supports pipeline operator", () => {
+test("evaluateExpression supports pipeline operator", () => {
   const env = {
     inc: (x: RuntimeValue) => (typeof x === "number" ? x + 1 : 0),
     add: (x: RuntimeValue, y: RuntimeValue) =>
@@ -610,7 +601,7 @@ Deno.test("evaluateExpression supports pipeline operator", () => {
   assertEquals(res4.value, 42);
 });
 
-Deno.test("evaluateExpression short-circuits &&", () => {
+test("evaluateExpression short-circuits &&", () => {
   const res = evaluateExpression("false && boom()", {
     throwOnError: false,
     env: {
@@ -624,7 +615,7 @@ Deno.test("evaluateExpression short-circuits &&", () => {
   assertEquals(res.value, false);
 });
 
-Deno.test("evaluateExpression evaluates RHS for && when LHS truthy", () => {
+test("evaluateExpression evaluates RHS for && when LHS truthy", () => {
   const res = evaluateExpression("true && inc(41)", {
     throwOnError: false,
     env: { inc: (x: RuntimeValue) => (typeof x === "number" ? x + 1 : 0) },
@@ -634,7 +625,7 @@ Deno.test("evaluateExpression evaluates RHS for && when LHS truthy", () => {
   assertEquals(res.value, 42);
 });
 
-Deno.test("evaluateExpression short-circuits ||", () => {
+test("evaluateExpression short-circuits ||", () => {
   const res = evaluateExpression("true || boom()", {
     throwOnError: false,
     env: {
@@ -648,14 +639,14 @@ Deno.test("evaluateExpression short-circuits ||", () => {
   assertEquals(res.value, true);
 });
 
-Deno.test("evaluateExpression evaluates RHS for || when LHS falsy", () => {
+test("evaluateExpression evaluates RHS for || when LHS falsy", () => {
   const res = evaluateExpression("false || 42", { throwOnError: false });
   assertEquals(res.success, true);
   if (!res.success) return;
   assertEquals(res.value, 42);
 });
 
-Deno.test("evaluateExpression evaluates conditionals", () => {
+test("evaluateExpression evaluates conditionals", () => {
   const res1 = evaluateExpression("true ? 1 : 2", { throwOnError: false });
   assertEquals(res1.success, true);
   if (!res1.success) return;
@@ -667,7 +658,7 @@ Deno.test("evaluateExpression evaluates conditionals", () => {
   assertEquals(res2.value, 2);
 });
 
-Deno.test("evaluateExpression forbids dangerous member access", () => {
+test("evaluateExpression forbids dangerous member access", () => {
   try {
     evaluateExpression("obj.__proto__", {
       env: { obj: { a: 1 } },
@@ -692,7 +683,7 @@ Deno.test("evaluateExpression forbids dangerous member access", () => {
   assertMatch(res.error.message, /forbidden member access/);
 });
 
-Deno.test("evaluateExpression enforces step budgets", () => {
+test("evaluateExpression enforces step budgets", () => {
   const res = evaluateExpression("1 + 2", {
     throwOnError: false,
     maxSteps: 0,
@@ -702,7 +693,7 @@ Deno.test("evaluateExpression enforces step budgets", () => {
   assertMatch(res.error.message, /budget exceeded/);
 });
 
-Deno.test("evaluateExpression enforces array literal size budgets", () => {
+test("evaluateExpression enforces array literal size budgets", () => {
   const res = evaluateExpression("[1, 2]", {
     throwOnError: false,
     maxArrayElements: 1,
@@ -712,7 +703,7 @@ Deno.test("evaluateExpression enforces array literal size budgets", () => {
   assertMatch(res.error.message, /array literal too large/);
 });
 
-Deno.test("evaluateExpression enforces recursion depth budgets", () => {
+test("evaluateExpression enforces recursion depth budgets", () => {
   const res = evaluateExpression("!true", {
     throwOnError: false,
     maxDepth: 0,
@@ -722,7 +713,7 @@ Deno.test("evaluateExpression enforces recursion depth budgets", () => {
   assertMatch(res.error.message, /recursion limit exceeded/);
 });
 
-Deno.test("evaluateExpression rejects invalid evaluation budgets", () => {
+test("evaluateExpression rejects invalid evaluation budgets", () => {
   const cases = [
     { maxSteps: Number.NaN },
     { maxDepth: Number.POSITIVE_INFINITY },
@@ -743,7 +734,7 @@ Deno.test("evaluateExpression rejects invalid evaluation budgets", () => {
   }
 });
 
-Deno.test("evaluateExpression reports parse failures when throwOnParseError=false", () => {
+test("evaluateExpression reports parse failures when throwOnParseError=false", () => {
   const res = evaluateExpression("(", {
     throwOnError: false,
     throwOnParseError: false,
@@ -754,7 +745,7 @@ Deno.test("evaluateExpression reports parse failures when throwOnParseError=fals
   assertEquals(res.error.index! >= 0, true);
 });
 
-Deno.test("evaluateExpression forwards parser resource limits", () => {
+test("evaluateExpression forwards parser resource limits", () => {
   const res = evaluateExpression("1 + 2", {
     throwOnError: false,
     throwOnParseError: false,
@@ -766,7 +757,7 @@ Deno.test("evaluateExpression forwards parser resource limits", () => {
   assertEquals(res.error.steps, 0);
 });
 
-Deno.test("evaluateAst returns errors for unknown operators (defensive)", () => {
+test("evaluateAst returns errors for unknown operators (defensive)", () => {
   const badUnary = {
     kind: "unary",
     op: "~",
@@ -793,7 +784,7 @@ Deno.test("evaluateAst returns errors for unknown operators (defensive)", () => 
   assertMatch(br.error.message, /unknown binary operator/);
 });
 
-Deno.test("evaluateAst rejects malformed nodes in non-throwing mode", () => {
+test("evaluateAst rejects malformed nodes in non-throwing mode", () => {
   const cases = [
     null,
     { kind: "unknown", span: { start: 0, end: 0 } },
@@ -809,7 +800,7 @@ Deno.test("evaluateAst rejects malformed nodes in non-throwing mode", () => {
   }
 });
 
-Deno.test("evaluateAst rejects accessors without invoking them", () => {
+test("evaluateAst rejects accessors without invoking them", () => {
   let called = 0;
   const expr: Record<string, unknown> = {
     span: { start: 0, end: 1 },
@@ -829,7 +820,7 @@ Deno.test("evaluateAst rejects accessors without invoking them", () => {
   assertMatch(res.error.message, /data property/);
 });
 
-Deno.test("evaluateAst rejects cyclic ASTs", () => {
+test("evaluateAst rejects cyclic ASTs", () => {
   const expr: Record<string, unknown> = {
     kind: "unary",
     op: "!",
@@ -843,7 +834,7 @@ Deno.test("evaluateAst rejects cyclic ASTs", () => {
   assertMatch(res.error.message, /cycle detected/);
 });
 
-Deno.test("evaluateAst wraps malformed AST errors in throwing mode", () => {
+test("evaluateAst wraps malformed AST errors in throwing mode", () => {
   assertThrows(
     () => evaluateAst(null as unknown as Expr),
     ExpEvalError,

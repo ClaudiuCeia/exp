@@ -1,12 +1,13 @@
-import { assert } from "@std/assert";
+import { test } from "bun:test";
+import { assert } from "./assert.ts";
 import { evaluateExpression } from "../src/eval.ts";
 import { parseExpression } from "../src/parse.ts";
 
-const mulberry32 = (seed: number): () => number => {
+const mulberry32 = (seed: number): (() => number) => {
   let a = seed | 0;
   return () => {
     a |= 0;
-    a = (a + 0x6D2B79F5) | 0;
+    a = (a + 0x6d2b79f5) | 0;
     let t = Math.imul(a ^ (a >>> 15), 1 | a);
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
@@ -56,11 +57,12 @@ const genString = (rng: () => number): string => {
     if (r < 0.08) out += "\\\\";
     else if (r < 0.12) out += "\\n";
     else if (r < 0.16) out += "\\t";
-    else if (r < 0.20) out += "\\" + quote;
-    else {out +=
-        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 _"[
-          randInt(rng, 63)
-        ];}
+    else if (r < 0.2) out += "\\" + quote;
+    else {
+      out += "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 _"[
+        randInt(rng, 63)
+      ];
+    }
   }
   out += quote;
   return out;
@@ -145,17 +147,17 @@ const genExpr = (rng: () => number, depth = 0): string => {
   if (depth > 3) return genPrimary(rng, depth);
 
   // 10%: conditional
-  if (chance(rng, 0.10)) {
+  if (chance(rng, 0.1)) {
     const test = genExpr(rng, depth + 1);
     const cons = genExpr(rng, depth + 1);
     const alt = genExpr(rng, depth + 1);
-    return `(${test}${maybeWs(rng)}?${maybeWs(rng)}${cons}${maybeWs(rng)}:${
-      maybeWs(rng)
-    }${alt})`;
+    return `(${test}${maybeWs(rng)}?${maybeWs(rng)}${cons}${maybeWs(rng)}:${maybeWs(
+      rng,
+    )}${alt})`;
   }
 
   // 10%: pipeline
-  if (chance(rng, 0.10)) {
+  if (chance(rng, 0.1)) {
     const lhs = genExpr(rng, depth + 1);
     const rhs = genPostfix(rng, genIdent(rng), depth + 1);
     return `(${lhs}${maybeWs(rng)}|>${maybeWs(rng)}${rhs})`;
@@ -179,8 +181,8 @@ const genExpr = (rng: () => number, depth = 0): string => {
   return parts.join("");
 };
 
-Deno.test("fuzz: parseExpression never throws in non-throwing mode", () => {
-  const seed = 0xC0FFEE;
+test("fuzz: parseExpression never throws in non-throwing mode", () => {
+  const seed = 0xc0ffee;
   const rng = mulberry32(seed);
 
   for (let i = 0; i < 2_000; i++) {
@@ -191,9 +193,9 @@ Deno.test("fuzz: parseExpression never throws in non-throwing mode", () => {
       res = parseExpression(input, { throwOnError: false });
     } catch (err) {
       throw new Error(
-        `parseExpression threw (seed=${seed}, i=${i}, input=${
-          JSON.stringify(input)
-        }): ${String(err)}`,
+        `parseExpression threw (seed=${seed}, i=${i}, input=${JSON.stringify(
+          input,
+        )}): ${String(err)}`,
       );
     }
 
@@ -210,8 +212,8 @@ Deno.test("fuzz: parseExpression never throws in non-throwing mode", () => {
   }
 });
 
-Deno.test("fuzz: evaluateExpression never throws in non-throwing mode", () => {
-  const seed = 0xBADC0DE;
+test("fuzz: evaluateExpression never throws in non-throwing mode", () => {
+  const seed = 0xbadc0de;
   const rng = mulberry32(seed);
 
   const env = {
@@ -252,9 +254,9 @@ Deno.test("fuzz: evaluateExpression never throws in non-throwing mode", () => {
       });
     } catch (err) {
       throw new Error(
-        `evaluateExpression threw (seed=${seed}, i=${i}, input=${
-          JSON.stringify(input)
-        }): ${String(err)}`,
+        `evaluateExpression threw (seed=${seed}, i=${i}, input=${JSON.stringify(
+          input,
+        )}): ${String(err)}`,
       );
     }
 

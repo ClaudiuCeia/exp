@@ -64,10 +64,10 @@ export type ParseResult =
 /**
  * Thrown parse error (default mode).
  *
- * Carries the byte `index` into the original input.
+ * Carries the UTF-16 code-unit `index` into the original input.
  */
 export class ExpParseError extends Error {
-  /** Byte index into the input string where parsing failed. */
+  /** UTF-16 code-unit index into the input string where parsing failed. */
   readonly index: number;
 
   /** Create an `ExpParseError` from a `ParseError` payload. */
@@ -227,10 +227,8 @@ const ExpressionLang = defineLanguage<ExprLang>({
 
   LogicalOr: (s) => {
     const op = any(lx.symbol("||"), lx.symbol("??"));
-    return chainl1(
-      s.LogicalAnd,
-      op,
-      (l, o, r) => mkBinary(l, o as BinaryOp, r),
+    return chainl1(s.LogicalAnd, op, (l, o, r) =>
+      mkBinary(l, o as BinaryOp, r),
     );
   },
 
@@ -241,10 +239,8 @@ const ExpressionLang = defineLanguage<ExprLang>({
 
   Equality: (s) => {
     const op = any(lx.symbol("=="), lx.symbol("!="));
-    return chainl1(
-      s.Comparison,
-      op,
-      (l, o, r) => mkBinary(l, o as BinaryOp, r),
+    return chainl1(s.Comparison, op, (l, o, r) =>
+      mkBinary(l, o as BinaryOp, r),
     );
   },
 
@@ -260,10 +256,8 @@ const ExpressionLang = defineLanguage<ExprLang>({
 
   Additive: (s) => {
     const op = any(lx.symbol("+"), lx.symbol("-"));
-    return chainl1(
-      s.Multiplicative,
-      op,
-      (l, o, r) => mkBinary(l, o as BinaryOp, r),
+    return chainl1(s.Multiplicative, op, (l, o, r) =>
+      mkBinary(l, o as BinaryOp, r),
     );
   },
 
@@ -274,10 +268,10 @@ const ExpressionLang = defineLanguage<ExprLang>({
 
   Unary: (s) => {
     const op = lx.lexeme(
-      map(
-        withSpan(any(str("!"), str("-"), str("+"))),
-        ({ value, start }) => ({ op: value as UnaryOp, start }),
-      ),
+      map(withSpan(any(str("!"), str("-"), str("+"))), ({ value, start }) => ({
+        op: value as UnaryOp,
+        start,
+      })),
     );
 
     return map(seq(many(op), s.Postfix), ([ops, expr]) => {
@@ -320,60 +314,82 @@ const ExpressionLang = defineLanguage<ExprLang>({
     const kwUndefined = keyword("undefined");
 
     const boolExpr: Parser<Expr> = any(
-      map(kwTrue, (t) => ({
-        kind: "boolean",
-        value: true,
-        span: { start: t.start, end: t.end },
-      } satisfies Expr)),
-      map(kwFalse, (f) => ({
-        kind: "boolean",
-        value: false,
-        span: { start: f.start, end: f.end },
-      } satisfies Expr)),
+      map(
+        kwTrue,
+        (t) =>
+          ({
+            kind: "boolean",
+            value: true,
+            span: { start: t.start, end: t.end },
+          }) satisfies Expr,
+      ),
+      map(
+        kwFalse,
+        (f) =>
+          ({
+            kind: "boolean",
+            value: false,
+            span: { start: f.start, end: f.end },
+          }) satisfies Expr,
+      ),
     );
 
-    const nullExpr: Parser<Expr> = map(kwNull, (n) => ({
-      kind: "null",
-      span: { start: n.start, end: n.end },
-    } satisfies Expr));
+    const nullExpr: Parser<Expr> = map(
+      kwNull,
+      (n) =>
+        ({
+          kind: "null",
+          span: { start: n.start, end: n.end },
+        }) satisfies Expr,
+    );
 
-    const undefinedExpr: Parser<Expr> = map(kwUndefined, (u) => ({
-      kind: "undefined",
-      span: { start: u.start, end: u.end },
-    } satisfies Expr));
+    const undefinedExpr: Parser<Expr> = map(
+      kwUndefined,
+      (u) =>
+        ({
+          kind: "undefined",
+          span: { start: u.start, end: u.end },
+        }) satisfies Expr,
+    );
 
-    const numExpr: Parser<Expr> = map(numberSpan, (n) => ({
-      kind: "number",
-      value: n.value,
-      span: { start: n.start, end: n.end },
-    } satisfies Expr));
+    const numExpr: Parser<Expr> = map(
+      numberSpan,
+      (n) =>
+        ({
+          kind: "number",
+          value: n.value,
+          span: { start: n.start, end: n.end },
+        }) satisfies Expr,
+    );
 
-    const strExpr: Parser<Expr> = map(stringSpan, (st) => ({
-      kind: "string",
-      value: st.value,
-      span: { start: st.start, end: st.end },
-    } satisfies Expr));
+    const strExpr: Parser<Expr> = map(
+      stringSpan,
+      (st) =>
+        ({
+          kind: "string",
+          value: st.value,
+          span: { start: st.start, end: st.end },
+        }) satisfies Expr,
+    );
 
     const identExpr: Parser<Expr> = map(
       guard(identSpan, (id) => !RESERVED.has(id.value), "identifier"),
-      (id) => ({
-        kind: "identifier",
-        name: id.value,
-        span: { start: id.start, end: id.end },
-      } satisfies Expr),
+      (id) =>
+        ({
+          kind: "identifier",
+          name: id.value,
+          span: { start: id.start, end: id.end },
+        }) satisfies Expr,
     );
 
     const arrayExpr: Parser<Expr> = map(
-      seq(
-        lbrack,
-        sepBy(s.Expression, comma),
-        rbrack,
-      ),
-      ([start, elements, end]) => ({
-        kind: "array",
-        elements,
-        span: { start, end },
-      } satisfies Expr),
+      seq(lbrack, sepBy(s.Expression, comma), rbrack),
+      ([start, elements, end]) =>
+        ({
+          kind: "array",
+          elements,
+          span: { start, end },
+        }) satisfies Expr,
     );
 
     const parenExpr: Parser<Expr> = map(

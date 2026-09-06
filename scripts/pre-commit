@@ -1,16 +1,7 @@
 #!/bin/sh
 
-set -e
-
 echo "Running pre-commit checks..."
 
-echo "Formatting..."
-deno fmt --check
-
-echo "Linting..."
-deno lint
-
-echo "Testing..."
-deno test --ignore=npm
+bun run check || exit 1
 
 echo "All checks passed!"

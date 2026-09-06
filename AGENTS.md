@@ -14,18 +14,20 @@ Expression language toolkit for TypeScript/JavaScript.
 
 - `mod.ts`: public entrypoint (re-export library surface).
 - `src/`: implementation.
-- `tests/`: Deno tests (`*.test.ts`) using `Deno.test` and `@std/assert`.
-- `scripts/`: repo tooling (npm build via `@deno/dnt`).
-- `npm/`: generated npm artifact (do not edit by hand; do not commit changes).
+- `tests/`: Bun tests (`*.test.ts`) using `bun:test`.
+- `scripts/`: repository tooling.
+- `dist/`: generated npm artifact (do not edit by hand; do not commit changes).
+- `deno.json`: JSR package metadata and Deno import mapping only.
 
 ## Commands
 
-- `deno task check`: format, lint, and test.
-- `deno test`: run tests.
-- `deno task build:npm`: build npm package into `npm/`.
+- `bun run check`: format check, lint, type-check, and test.
+- `bun run test`: run tests.
+- `bun run build`: build the npm package into `dist/`.
+- `bun run package:check`: build and validate npm package metadata and types.
 
 ## Conventions
 
 - Keep public exports flowing through `mod.ts`.
 - Prefer explicit exported types.
-- Avoid Bun/Node-only APIs in runtime code.
+- Keep Bun/Node-only APIs out of `src/`; the core remains runtime-neutral.
