@@ -8,10 +8,14 @@ trust begins. Use [SECURITY.md](../SECURITY.md) to report a vulnerability.
 Expression source may be untrusted. `exp` parses its own expression grammar and
 does not execute the source through `eval()` or `new Function()`.
 
-Input length, syntax nesting, and parsed AST size have configurable limits.
+Input length, syntax nesting, and AST construction have configurable limits.
 Parser limits count parser work. They are not wall-clock deadlines.
 The syntax-nesting preflight scans the source once and ignores delimiters and
 conditional markers inside strings, line comments, and block comments.
+`maxNodes` is a per-parse construction budget. It is charged before each AST
+node is allocated, including transient nodes later replaced or discarded during
+parsing. Exhaustion aborts parsing before that node is built, so the construction
+count can exceed the number of nodes reachable from a successful result.
 
 ## Environment data
 

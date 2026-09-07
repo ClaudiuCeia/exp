@@ -44,6 +44,7 @@ const complexAst = mustParse(COMPLEX_EXPRESSION);
 const nesting256 = nestedPreflightInput(256);
 const nesting1k = nestedPreflightInput(1_024);
 const nesting4k = nestedPreflightInput(4_096);
+const flat16k = Array.from({ length: 16_384 }, () => "1").join(" + ");
 const runtimeMember4x250 = runtimeMemberWorkload(4, 250);
 const runtimeMember16x1k = runtimeMemberWorkload(16, 1_000);
 const runtimeMembers10k: Env = {
@@ -68,6 +69,23 @@ function rejectNestedInput(
     result.error.index !== expectedIndex
   ) {
     throw new Error("nested input returned an unexpected parse result");
+  }
+  sink = result.error.index;
+}
+
+function rejectFlatInput(input: string, maxNodes: number): void {
+  const result = parseExpression(input, {
+    throwOnError: false,
+    maxInputLength: input.length,
+    maxNodes,
+  });
+  if (
+    result.success ||
+    result.error.message !== "AST node limit exceeded" ||
+    (result.error.index !== 4 &&
+      !(Bun.argv.includes("--baseline") && result.error.index === 0))
+  ) {
+    throw new Error("flat input returned an unexpected parse result");
   }
   sink = result.error.index;
 }
@@ -117,6 +135,12 @@ const cases = [
         "parse nesting limit exceeded",
         1_025,
       );
+    },
+  },
+  {
+    name: "parse/reject-flat-16384-at-1-node",
+    execute: () => {
+      rejectFlatInput(flat16k, 1);
     },
   },
   {

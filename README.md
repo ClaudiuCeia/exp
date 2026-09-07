@@ -401,7 +401,7 @@ from untrusted sources.
 | ------------------- | --------: | -------------------------------------------------- |
 | `maxInputLength`    | `100_000` | UTF-16 code units in expression source             |
 | `maxNestingDepth`   |      `64` | Parentheses, arrays, and conditional nesting       |
-| `maxNodes`          |  `10_000` | Parsed AST nodes                                   |
+| `maxNodes`          |  `10_000` | AST node allocations during parsing                |
 | `maxSteps`          |  `10_000` | AST validation and nodes visited during evaluation |
 | `maxDepth`          |     `256` | AST validation and interpreter recursion depth     |
 | `maxArrayElements`  |   `1_000` | Elements in one array literal                      |
@@ -410,11 +410,15 @@ from untrusted sources.
 
 The `maxNestingDepth` preflight scans the source once. Delimiters and
 conditional markers inside strings and comments do not count toward the limit.
+The per-parse `maxNodes` construction budget is charged before each AST node is
+allocated, and parsing stops at the first node that would exceed it. Transient
+nodes that are later replaced or discarded during parsing also count, so this
+can exceed the number of nodes reachable from the returned AST.
 
-These counters bound the parser and AST traversal described above. They do not
-bound every individual operation, string size, numeric magnitude, or work
-inside application-provided functions. They are not a timeout. `maxSteps`
-counts AST work. It does not interrupt a slow environment function.
+These counters bound parser construction and AST traversal. They do not bound
+every individual operation, string size, numeric magnitude, or work inside
+application-provided functions. They are not a timeout. `maxSteps` counts AST
+work. It does not interrupt a slow environment function.
 
 ## Persisted expressions
 
