@@ -225,7 +225,7 @@ jobs:
           trap 'test -f benchmark-results/report.md || printf "## Performance\n\nBenchmark execution failed. See the workflow logs.\n" > benchmark-results/report.md' ERR
 
           for run in 1 2 3; do
-            (cd baseline && bun run bench/comparison.bench.ts --json) > "benchmark-results/base/${run}.json"
+            (cd baseline && bun run bench/comparison.bench.ts --baseline --json) > "benchmark-results/base/${run}.json"
             (cd current && bun run bench/comparison.bench.ts --json) > "benchmark-results/head/${run}.json"
           done
 
