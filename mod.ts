@@ -25,6 +25,7 @@ export {
   type ParseResult,
 } from "./src/parse.ts";
 export {
+  type EnvironmentInput,
   type EvalError,
   type EvalOptions,
   type EvalResult,

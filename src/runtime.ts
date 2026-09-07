@@ -1,16 +1,16 @@
 /** Primitive runtime values supported by the evaluator. */
 export type RuntimePrimitive = undefined | null | boolean | number | string;
 
-/** A function callable from expressions (must accept/return `RuntimeValue`). */
-export type RuntimeFunction = (...args: RuntimeValue[]) => RuntimeValue;
+/** A host function callable by expressions but opaque to result consumers. */
+export type RuntimeFunction = (arg: never, ...args: never[]) => unknown;
 
-/** A `RuntimeValue` array. */
-export interface RuntimeArray extends Array<RuntimeValue> {}
+/** A readonly array of `RuntimeValue` entries. */
+export interface RuntimeArray extends ReadonlyArray<RuntimeValue> {}
 
 /** A plain object mapping string keys to `RuntimeValue`. */
 export interface RuntimeObject {
   /** Own enumerable properties (prototype is ignored by the evaluator). */
-  [key: string]: RuntimeValue;
+  readonly [key: string]: RuntimeValue;
 }
 
 /**
@@ -27,9 +27,13 @@ export type RuntimeValue =
 
 export type Env = Record<string, RuntimeValue>;
 
+type MutableRuntimeArray = RuntimeValue[];
+type MutableRuntimeObject = { [key: string]: RuntimeValue };
+
 const ArrayConstructor = Array;
 const arrayFrom = Array.from;
 const arrayIsArray = Array.isArray;
+const numberIsSafeInteger = Number.isSafeInteger;
 const objectCreate = Object.create;
 const objectDefineProperty = Object.defineProperty;
 const objectEntries = Object.entries;
@@ -102,8 +106,8 @@ type RuntimePath =
   | Readonly<{ kind: "child"; parent: RuntimePath; segment: string }>;
 
 type NormalizeTarget =
-  | Readonly<{ kind: "array"; value: RuntimeArray; index: number }>
-  | Readonly<{ kind: "object"; value: RuntimeObject; key: string }>;
+  | Readonly<{ kind: "array"; value: MutableRuntimeArray; index: number }>
+  | Readonly<{ kind: "object"; value: MutableRuntimeObject; key: string }>;
 
 type ArrayFrameBase = Readonly<{
   kind: "array";
@@ -121,7 +125,7 @@ type ArrayFrame = ArrayFrameBase &
     | Readonly<{ mode: "validate" }>
     | Readonly<{
         mode: "normalize";
-        output: RuntimeArray;
+        output: MutableRuntimeArray;
         target: NormalizeTarget | undefined;
       }>
   );
@@ -141,7 +145,7 @@ type ObjectFrame = ObjectFrameBase &
     | Readonly<{ mode: "validate" }>
     | Readonly<{
         mode: "normalize";
-        output: RuntimeObject;
+        output: MutableRuntimeObject;
         target: NormalizeTarget | undefined;
       }>
   );
@@ -256,7 +260,9 @@ const traverseRuntimeValue = (
           if (
             lengthDescriptor === undefined ||
             !("value" in lengthDescriptor) ||
-            typeof lengthDescriptor.value !== "number"
+            typeof lengthDescriptor.value !== "number" ||
+            !numberIsSafeInteger(lengthDescriptor.value) ||
+            lengthDescriptor.value < 0
           ) {
             return traversalError(currentPath, "must be an Array");
           }
@@ -266,7 +272,7 @@ const traverseRuntimeValue = (
           if (!counted.ok) return counted;
 
           if (state.mode === "normalize") {
-            const output: RuntimeArray = reflectApply(
+            const output: MutableRuntimeArray = reflectApply(
               arrayFrom,
               ArrayConstructor,
               [{ length }],
@@ -304,9 +310,9 @@ const traverseRuntimeValue = (
             );
           }
 
-          let output: RuntimeObject | undefined;
+          let output: MutableRuntimeObject | undefined;
           if (state.mode === "normalize") {
-            output = objectCreate(null) as RuntimeObject;
+            output = objectCreate(null) as MutableRuntimeObject;
             seenMapSet(state.seen, currentValue, output);
           }
 
@@ -476,6 +482,22 @@ export const isRuntimeValue = (
     }).ok;
   } catch {
     return false;
+  }
+};
+
+export const normalizeRuntimeValue = (
+  value: unknown,
+  limits: RuntimeValueLimits = { maxDepth: 64, maxEntries: 10_000 },
+): { ok: true; value: RuntimeValue } | { ok: false; message: string } => {
+  try {
+    return traverseRuntimeValue(value, "value", 0, {
+      entries: 0,
+      limits,
+      mode: "normalize",
+      seen: new WeakMapConstructor(),
+    });
+  } catch {
+    return { ok: false, message: "value inspection failed" };
   }
 };
 
