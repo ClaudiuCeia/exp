@@ -12,6 +12,28 @@ import {
 
 import { std } from "./std.ts";
 
+const WeakSetConstructor = WeakSet;
+const arrayIsArray = Array.isArray;
+const weakSetHas = WeakSet.prototype.has;
+const weakSetAdd = WeakSet.prototype.add;
+const reflectApply = Reflect.apply;
+const numberIsSafeInteger = Number.isSafeInteger;
+const objectCreate = Object.create;
+const objectDefineProperty = Object.defineProperty;
+const objectEntries = Object.entries;
+const objectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+const objectHasOwn = Object.hasOwn;
+
+const createContainerSet = (): WeakSet<object> =>
+  new WeakSetConstructor<object>();
+
+const containerSetHas = (set: WeakSet<object>, container: object): boolean =>
+  reflectApply(weakSetHas, set, [container]);
+
+const containerSetAdd = (set: WeakSet<object>, container: object): void => {
+  reflectApply(weakSetAdd, set, [container]);
+};
+
 /** Options for `evaluateAst` and `evaluateExpression`. */
 export type EvalOptions = Readonly<{
   /**
@@ -101,6 +123,7 @@ export type EvalResult =
 
 type Ctx = {
   env: Record<string, RuntimeValue>;
+  currentContainers: WeakSet<object>;
   steps: number;
   maxSteps: number;
   depth: number;
@@ -115,6 +138,15 @@ type Ctx = {
 const FORBIDDEN_MEMBERS = new Set(["__proto__", "prototype", "constructor"]);
 const DEFAULT_MAX_ARRAY_ELEMENTS = 1_000;
 const DEFAULT_MAX_CALL_ARGUMENTS = DEFAULT_MAX_ARRAY_ELEMENTS;
+const UNSUPPORTED_MEMBER_ERROR = "member is not a supported runtime value";
+
+const isRuntimeArray = (value: RuntimeValue): value is RuntimeValue[] => {
+  try {
+    return arrayIsArray(value);
+  } catch {
+    throw new Error(UNSUPPORTED_MEMBER_ERROR);
+  }
+};
 
 const isTruthy = (v: RuntimeValue): boolean => {
   return !!v;
@@ -205,26 +237,68 @@ const getMember = (obj: RuntimeValue, prop: string, ctx: Ctx): RuntimeValue => {
     throw new Error("forbidden member access");
   }
 
-  if (Array.isArray(obj)) {
-    if (prop === "length") return obj.length;
-    return undefined;
+  const ownerIsContainer = obj !== null && typeof obj === "object";
+  const ownerWasCurrent =
+    ownerIsContainer && containerSetHas(ctx.currentContainers, obj);
+  if (ownerIsContainer && !ownerWasCurrent) {
+    ctx.currentContainers = createContainerSet();
+  }
+
+  if (isRuntimeArray(obj)) {
+    if (prop !== "length") return undefined;
+    if (!ownerWasCurrent) {
+      if (
+        !isRuntimeValue(obj, {
+          maxDepth: ctx.maxRuntimeDepth,
+          maxEntries: ctx.maxRuntimeEntries,
+        })
+      ) {
+        throw new Error(UNSUPPORTED_MEMBER_ERROR);
+      }
+    }
+
+    let descriptor: PropertyDescriptor | undefined;
+    try {
+      descriptor = objectGetOwnPropertyDescriptor(obj, "length");
+    } catch {
+      throw new Error(UNSUPPORTED_MEMBER_ERROR);
+    }
+    if (descriptor === undefined || !("value" in descriptor)) {
+      throw new Error(UNSUPPORTED_MEMBER_ERROR);
+    }
+    const length: unknown = descriptor.value;
+    if (
+      typeof length !== "number" ||
+      !numberIsSafeInteger(length) ||
+      length < 0 ||
+      (!ownerWasCurrent && length > ctx.maxRuntimeEntries)
+    ) {
+      throw new Error(UNSUPPORTED_MEMBER_ERROR);
+    }
+    return length;
   }
 
   if (isPlainObject(obj)) {
-    const descriptor = Object.getOwnPropertyDescriptor(obj, prop);
+    const descriptor = objectGetOwnPropertyDescriptor(obj, prop);
     if (descriptor === undefined || !descriptor.enumerable) return undefined;
     if (!("value" in descriptor)) {
       throw new Error("member must be an enumerable data property");
     }
-    if (
-      !isRuntimeValue(descriptor.value, {
-        maxDepth: ctx.maxRuntimeDepth,
-        maxEntries: ctx.maxRuntimeEntries,
-      })
-    ) {
-      throw new Error("member is not a supported runtime value");
+    const value: unknown = descriptor.value;
+    const isContainer = value !== null && typeof value === "object";
+    if (ownerWasCurrent) {
+      if (isContainer) containerSetAdd(ctx.currentContainers, value);
+    } else {
+      if (
+        !isRuntimeValue(value, {
+          maxDepth: ctx.maxRuntimeDepth,
+          maxEntries: ctx.maxRuntimeEntries,
+        })
+      ) {
+        throw new Error(UNSUPPORTED_MEMBER_ERROR);
+      }
     }
-    return descriptor.value;
+    return value as RuntimeValue;
   }
 
   return undefined;
@@ -241,7 +315,7 @@ type ConditionalExpr = Extract<Expr, { kind: "conditional" }>;
 type UndefinedExpr = Extract<Expr, { kind: "undefined" }>;
 
 const evalIdentifierExpr = (expr: IdentifierExpr, ctx: Ctx): EvalResult => {
-  if (Object.hasOwn(ctx.env, expr.name)) {
+  if (objectHasOwn(ctx.env, expr.name)) {
     return { success: true, value: ctx.env[expr.name] };
   }
   if (ctx.unknownIdentifier === "undefined") {
@@ -261,6 +335,7 @@ const evalArrayExpr = (expr: ArrayExpr, ctx: Ctx): EvalResult => {
     if (!r.success) return r;
     out.push(r.value);
   }
+  containerSetAdd(ctx.currentContainers, out);
   return { success: true, value: out };
 };
 
@@ -386,6 +461,7 @@ const evalCallExpr = (expr: CallExpr, ctx: Ctx): EvalResult => {
     args.push(ar.value);
   }
 
+  ctx.currentContainers = createContainerSet();
   const out = receiver === undefined ? fn(...args) : fn.apply(receiver, args);
   if (
     !isRuntimeValue(out, {
@@ -469,7 +545,7 @@ const readAstProperty = (
   value: object,
   property: string,
 ): { ok: true; value: unknown } | { ok: false; message: string } => {
-  const descriptor = Object.getOwnPropertyDescriptor(value, property);
+  const descriptor = objectGetOwnPropertyDescriptor(value, property);
   if (descriptor === undefined || !("value" in descriptor)) {
     return { ok: false, message: `'${property}' must be an own data property` };
   }
@@ -511,7 +587,7 @@ const readAstChildren = (
     return { ok: false, message: `'${property}' must be an Array` };
   }
 
-  const lengthDescriptor = Object.getOwnPropertyDescriptor(
+  const lengthDescriptor = objectGetOwnPropertyDescriptor(
     field.value,
     "length",
   );
@@ -608,7 +684,7 @@ const validateAst = (
           if (frame.index >= frame.length) continue;
           const budget = chargeTraversal();
           if (budget !== null) return budget;
-          const child = Object.getOwnPropertyDescriptor(
+          const child = objectGetOwnPropertyDescriptor(
             frame.value,
             String(frame.index),
           );
@@ -832,6 +908,7 @@ export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
     return { success: false, error };
   }
 
+  const currentContainers = createContainerSet();
   const envRes = normalizeEnv(opts.env as unknown, {
     maxDepth: maxRuntimeDepth,
     maxEntries: maxRuntimeEntries,
@@ -844,31 +921,43 @@ export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
 
   let res: EvalResult;
   try {
-    if (Object.hasOwn(envRes.env, "std")) {
+    if (objectHasOwn(envRes.env, "std")) {
       res = evalError(
         "env['std'] is reserved (stdlib is always available as std.*)",
         undefined,
         0,
       );
     } else {
-      const env = Object.create(null) as Record<string, RuntimeValue>;
-      Object.defineProperty(env, "std", {
+      const env = objectCreate(null) as Record<string, RuntimeValue>;
+      objectDefineProperty(env, "std", {
         value: std,
         enumerable: true,
         writable: true,
         configurable: true,
       });
-      for (const [k, v] of Object.entries(envRes.env)) {
-        Object.defineProperty(env, k, {
+      containerSetAdd(currentContainers, std);
+      const entries = objectEntries(envRes.env);
+      for (let index = 0; index < entries.length; index++) {
+        const entry = entries[index];
+        if (entry === undefined) {
+          throw new Error("normalized environment entry is missing");
+        }
+        const k = entry[0];
+        const v = entry[1];
+        objectDefineProperty(env, k, {
           value: v,
           enumerable: true,
           writable: true,
           configurable: true,
         });
+        if (v !== null && typeof v === "object") {
+          containerSetAdd(currentContainers, v);
+        }
       }
 
       const ctx: Ctx = {
         env,
+        currentContainers,
         steps: 0,
         maxSteps,
         depth: 0,
