@@ -17,6 +17,11 @@ const weakSetHas = WeakSet.prototype.has;
 const weakSetAdd = WeakSet.prototype.add;
 const reflectApply = Reflect.apply;
 const numberIsSafeInteger = Number.isSafeInteger;
+const objectCreate = Object.create;
+const objectDefineProperty = Object.defineProperty;
+const objectEntries = Object.entries;
+const objectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+const objectHasOwn = Object.hasOwn;
 
 const createContainerSet = (): WeakSet<object> =>
   new WeakSetConstructor<object>();
@@ -258,7 +263,7 @@ const getMember = (obj: RuntimeValue, prop: string, ctx: Ctx): RuntimeValue => {
 
     let descriptor: PropertyDescriptor | undefined;
     try {
-      descriptor = Object.getOwnPropertyDescriptor(obj, "length");
+      descriptor = objectGetOwnPropertyDescriptor(obj, "length");
     } catch {
       throw new Error(UNSUPPORTED_MEMBER_ERROR);
     }
@@ -278,7 +283,7 @@ const getMember = (obj: RuntimeValue, prop: string, ctx: Ctx): RuntimeValue => {
   }
 
   if (isPlainObject(obj)) {
-    const descriptor = Object.getOwnPropertyDescriptor(obj, prop);
+    const descriptor = objectGetOwnPropertyDescriptor(obj, prop);
     if (descriptor === undefined || !descriptor.enumerable) return undefined;
     if (!("value" in descriptor)) {
       throw new Error("member must be an enumerable data property");
@@ -314,7 +319,7 @@ type ConditionalExpr = Extract<Expr, { kind: "conditional" }>;
 type UndefinedExpr = Extract<Expr, { kind: "undefined" }>;
 
 const evalIdentifierExpr = (expr: IdentifierExpr, ctx: Ctx): EvalResult => {
-  if (Object.hasOwn(ctx.env, expr.name)) {
+  if (objectHasOwn(ctx.env, expr.name)) {
     return { success: true, value: ctx.env[expr.name] };
   }
   if (ctx.unknownIdentifier === "undefined") {
@@ -544,7 +549,7 @@ const readAstProperty = (
   value: object,
   property: string,
 ): { ok: true; value: unknown } | { ok: false; message: string } => {
-  const descriptor = Object.getOwnPropertyDescriptor(value, property);
+  const descriptor = objectGetOwnPropertyDescriptor(value, property);
   if (descriptor === undefined || !("value" in descriptor)) {
     return { ok: false, message: `'${property}' must be an own data property` };
   }
@@ -586,7 +591,7 @@ const readAstChildren = (
     return { ok: false, message: `'${property}' must be an Array` };
   }
 
-  const lengthDescriptor = Object.getOwnPropertyDescriptor(
+  const lengthDescriptor = objectGetOwnPropertyDescriptor(
     field.value,
     "length",
   );
@@ -683,7 +688,7 @@ const validateAst = (
           if (frame.index >= frame.length) continue;
           const budget = chargeTraversal();
           if (budget !== null) return budget;
-          const child = Object.getOwnPropertyDescriptor(
+          const child = objectGetOwnPropertyDescriptor(
             frame.value,
             String(frame.index),
           );
@@ -920,23 +925,30 @@ export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
 
   let res: EvalResult;
   try {
-    if (Object.hasOwn(envRes.env, "std")) {
+    if (objectHasOwn(envRes.env, "std")) {
       res = evalError(
         "env['std'] is reserved (stdlib is always available as std.*)",
         undefined,
         0,
       );
     } else {
-      const env = Object.create(null) as Record<string, RuntimeValue>;
-      Object.defineProperty(env, "std", {
+      const env = objectCreate(null) as Record<string, RuntimeValue>;
+      objectDefineProperty(env, "std", {
         value: std,
         enumerable: true,
         writable: true,
         configurable: true,
       });
       containerSetAdd(currentContainers, std);
-      for (const [k, v] of Object.entries(envRes.env)) {
-        Object.defineProperty(env, k, {
+      const entries = objectEntries(envRes.env);
+      for (let index = 0; index < entries.length; index++) {
+        const entry = entries[index];
+        if (entry === undefined) {
+          throw new Error("normalized environment entry is missing");
+        }
+        const k = entry[0];
+        const v = entry[1];
+        objectDefineProperty(env, k, {
           value: v,
           enumerable: true,
           writable: true,
