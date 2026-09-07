@@ -937,6 +937,58 @@ test("evaluateAst uses captured descriptors for cached member reads", () => {
   }
 });
 
+test("evaluateAst uses captured array classification for cached owners", () => {
+  const descriptor = Object.getOwnPropertyDescriptor(Array, "isArray");
+  if (descriptor === undefined) throw new Error("missing Array.isArray");
+  const arrayIsArray = Array.isArray;
+  let inspectedOwners = 0;
+  const member = new Proxy(
+    {
+      kind: "member" as const,
+      object: {
+        kind: "identifier" as const,
+        name: "box",
+        span: { start: 0, end: 3 },
+      },
+      property: "secret",
+      span: { start: 0, end: 10 },
+    },
+    {
+      get(target, property, receiver) {
+        Object.defineProperty(Array, "isArray", {
+          ...descriptor,
+          value: (value: unknown) => {
+            if (
+              value !== null &&
+              typeof value === "object" &&
+              Object.hasOwn(value, "secret")
+            ) {
+              inspectedOwners++;
+              Object.defineProperty(value, "secret", {
+                value: new Date(),
+                enumerable: true,
+              });
+            }
+            return arrayIsArray(value);
+          },
+        });
+        return Reflect.get(target, property, receiver);
+      },
+    },
+  );
+
+  try {
+    const result = evaluateAst(member, {
+      env: { box: { secret: 1 } },
+      throwOnError: false,
+    });
+    assertEquals(result, { success: true, value: 1 });
+    assertEquals(inspectedOwners, 0);
+  } finally {
+    Object.defineProperty(Array, "isArray", descriptor);
+  }
+});
+
 test("evaluateExpression bounds runtime value normalization", () => {
   const nested = { child: { child: { value: 1 } } };
   const depthResult = evaluateExpression("nested.child", {
