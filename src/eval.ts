@@ -6,6 +6,7 @@ import {
   checkRuntimeValue,
   isPlainObject,
   normalizeEnv,
+  normalizeRuntimeValue,
   prepareEnv,
   type Env,
   type RuntimeFunction,
@@ -40,6 +41,7 @@ const objectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 const objectHasOwn = Object.hasOwn;
 const StringConstructor = String;
 const stringCharCodeAt = String.prototype.charCodeAt;
+const standardLibraryEntryCount = objectEntries(std).length;
 
 const createContainerSet = (): WeakSet<object> =>
   new WeakSetConstructor<object>();
@@ -209,6 +211,15 @@ const DEFAULT_MAX_CALL_ARGUMENTS = DEFAULT_MAX_ARRAY_ELEMENTS;
 const DEFAULT_MAX_RUNTIME_DEPTH = 64;
 const DEFAULT_MAX_RUNTIME_ENTRIES = 10_000;
 const UNSUPPORTED_MEMBER_ERROR = "member is not a supported runtime value";
+const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
+
+const saturatingAdd = (left: number, right: number): number =>
+  left > MAX_SAFE_INTEGER - right ? MAX_SAFE_INTEGER : left + right;
+
+const saturatingMultiply = (left: number, right: number): number =>
+  left !== 0 && right > MAX_SAFE_INTEGER / left
+    ? MAX_SAFE_INTEGER
+    : left * right;
 
 class EvaluationBudgetExceeded extends Error {
   constructor() {
@@ -702,17 +713,7 @@ const includesArray = (
   needle: RuntimeValue,
   ctx: Ctx,
 ): boolean => {
-  const lengthDescriptor = objectGetOwnPropertyDescriptor(haystack, "length");
-  if (
-    lengthDescriptor === undefined ||
-    !("value" in lengthDescriptor) ||
-    typeof lengthDescriptor.value !== "number" ||
-    !numberIsSafeInteger(lengthDescriptor.value) ||
-    lengthDescriptor.value < 0
-  ) {
-    throw new Error("std.includes expects an Array length data property");
-  }
-  const length = lengthDescriptor.value;
+  const length = runtimeArrayLength(haystack, "std.includes");
   for (let index = 0; index < length; index++) {
     consumeWork(ctx, 1);
     const descriptor = objectGetOwnPropertyDescriptor(
@@ -726,6 +727,20 @@ const includesArray = (
     if (descriptor.value === needle) return true;
   }
   return false;
+};
+
+const runtimeArrayLength = (value: RuntimeArray, name: string): number => {
+  const lengthDescriptor = objectGetOwnPropertyDescriptor(value, "length");
+  if (
+    lengthDescriptor === undefined ||
+    !("value" in lengthDescriptor) ||
+    typeof lengthDescriptor.value !== "number" ||
+    !numberIsSafeInteger(lengthDescriptor.value) ||
+    lengthDescriptor.value < 0
+  ) {
+    throw new Error(`${name} expects an Array length data property`);
+  }
+  return lengthDescriptor.value;
 };
 
 const toSliceIndex = (value: number, length: number): number => {
@@ -758,6 +773,14 @@ const callStandardFunction = (
   const first = args[0];
   const second = args[1];
 
+  if (fn === std.len) {
+    if (typeof first === "string")
+      return { handled: true, value: first.length };
+    if (isRuntimeArray(first)) {
+      return { handled: true, value: runtimeArrayLength(first, "std.len") };
+    }
+    return { handled: true, value: invoke() };
+  }
   if (fn === std.lower || fn === std.upper || fn === std.trim) {
     if (typeof first === "string") consumeWork(ctx, first.length);
     return { handled: true, value: invoke() };
@@ -1312,6 +1335,7 @@ export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
   }
 
   let res: EvalResult;
+  let resultSteps = 0;
   try {
     if (envRes !== undefined && objectHasOwn(envRes.env, "std")) {
       res = evalError(
@@ -1371,12 +1395,44 @@ export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
         unknownIdentifier: opts.unknownIdentifier ?? "error",
       };
       res = evalExpr(expr, ctx);
+      resultSteps = ctx.steps;
     }
   } catch {
     res = evalError("evaluation setup failed", undefined, 0);
   }
 
-  if (res.success) return res;
+  if (res.success) {
+    const resultMaxEntries = saturatingAdd(
+      saturatingAdd(maxRuntimeEntries, standardLibraryEntryCount),
+      saturatingMultiply(maxSteps, saturatingAdd(maxRuntimeEntries, 1)),
+    );
+    let normalizationSteps = 0;
+    const normalized = normalizeRuntimeValue(
+      res.value,
+      {
+        maxDepth: saturatingAdd(maxDepth, maxRuntimeDepth),
+        maxEntries: resultMaxEntries,
+      },
+      (units) => {
+        if (units > maxSteps - normalizationSteps) {
+          normalizationSteps = maxSteps + 1;
+          return false;
+        }
+        normalizationSteps += units;
+        return true;
+      },
+    );
+    if (normalized.ok) return { success: true, value: normalized.value };
+    const error: EvalError = {
+      message:
+        normalized.reason === "budget"
+          ? "evaluation budget exceeded"
+          : "evaluation result is not a supported runtime value",
+      steps: normalized.reason === "budget" ? normalizationSteps : resultSteps,
+    };
+    if (throwOnError) throw new ExpEvalError(error);
+    return { success: false, error };
+  }
   if (throwOnError) throw new ExpEvalError(res.error);
   return res;
 }
