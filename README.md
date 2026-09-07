@@ -408,8 +408,8 @@ from untrusted sources.
 | `maxRuntimeDepth`   |      `64` | Environment and function-return graph depth        |
 | `maxRuntimeEntries` |  `10_000` | Environment and function-return graph entries      |
 
-The current `maxNestingDepth` pre-scan also counts parentheses, brackets, and
-conditional markers inside comments.
+The `maxNestingDepth` preflight scans the source once. Delimiters and
+conditional markers inside strings and comments do not count toward the limit.
 
 These counters bound the parser and AST traversal described above. They do not
 bound every individual operation, string size, numeric magnitude, or work

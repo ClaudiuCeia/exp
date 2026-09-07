@@ -10,8 +10,8 @@ does not execute the source through `eval()` or `new Function()`.
 
 Input length, syntax nesting, and parsed AST size have configurable limits.
 Parser limits count parser work. They are not wall-clock deadlines.
-The current syntax-nesting pre-scan also counts parentheses, brackets, and
-conditional markers inside comments.
+The syntax-nesting preflight scans the source once and ignores delimiters and
+conditional markers inside strings, line comments, and block comments.
 
 ## Environment data
 

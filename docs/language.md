@@ -21,8 +21,8 @@ Strings support common escapes, hexadecimal escapes, Unicode escapes, and line
 continuations. Raw line terminators and digit or octal escapes are rejected.
 
 Whitespace, `//` comments, and non-nested `/* ... */` comments are accepted as
-trivia. The current syntax-nesting limit pre-scan still counts parentheses,
-brackets, and conditional markers inside comments.
+trivia. The syntax-nesting limit ignores parentheses, brackets, and conditional
+markers inside strings and comments.
 
 ## Precedence
 

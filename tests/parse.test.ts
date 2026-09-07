@@ -358,20 +358,159 @@ test("parseExpression rejects excessive nesting without overflowing", () => {
   }
 });
 
-test("parseExpression ignores delimiters inside strings", () => {
-  const res = parseExpression('"(([[???"', {
+test("parseExpression treats delimiters and comment markers inside strings as content", () => {
+  const cases = [
+    { input: '"(([[???"', value: "(([[???" },
+    { input: "'// /* */ ([? \"'", value: '// /* */ ([? "' },
+    { input: '"// /* */ ([? \\\""', value: '// /* */ ([? "' },
+  ];
+
+  for (const { input, value } of cases) {
+    const res = parseExpression(input, {
+      throwOnError: false,
+      maxNestingDepth: 0,
+    });
+    assertEquals(res, {
+      success: true,
+      value: { kind: "string", value, span: { start: 0, end: input.length } },
+    });
+  }
+});
+
+test("parseExpression counts question marks but not nullish operators", () => {
+  const nullish = parseExpression("null ?? undefined", {
     throwOnError: false,
     maxNestingDepth: 0,
   });
+  assertEquals(nullish.success, true);
+
+  const conditional = parseExpression("a ? b : c", {
+    throwOnError: false,
+    maxNestingDepth: 0,
+  });
+  assertEquals(conditional, {
+    success: false,
+    error: { message: "parse nesting limit exceeded", index: 2 },
+  });
+});
+
+test("parseExpression rejects comment cancellation of 1000 real nesting levels", () => {
+  const input = "(/*)*/".repeat(1_000) + "1" + ")".repeat(1_000);
+  const res = parseExpression(input, {
+    throwOnError: false,
+    maxInputLength: input.length,
+    maxNestingDepth: 1,
+  });
+
+  assertEquals(res, {
+    success: false,
+    error: { message: "parse nesting limit exceeded", index: 6 },
+  });
+});
+
+test("parseExpression ignores opening delimiters and quotes in comments", () => {
+  const inputs = ["1 // ([? \" '\n", "1 /* ([? \" ' */"];
+
+  for (const input of inputs) {
+    const res = parseExpression(input, {
+      throwOnError: false,
+      maxNestingDepth: 0,
+    });
+    assertEquals(res, {
+      success: true,
+      value: { kind: "number", value: 1, span: { start: 0, end: 1 } },
+    });
+  }
+});
+
+test("parseExpression does not let closing delimiters in comments cancel nesting", () => {
+  const cases = [
+    { input: "(// )]\n(1))", index: 7 },
+    { input: "(/*)]*/(1))", index: 7 },
+  ];
+
+  for (const { input, index } of cases) {
+    const res = parseExpression(input, {
+      throwOnError: false,
+      maxNestingDepth: 1,
+    });
+    assertEquals(res, {
+      success: false,
+      error: { message: "parse nesting limit exceeded", index },
+    });
+  }
+});
+
+test("parseExpression resumes nesting checks after quotes in comments", () => {
+  const cases = [
+    { input: "// ' \"\n(1)", index: 7 },
+    { input: "/* ' \" */(1)", index: 9 },
+  ];
+
+  for (const { input, index } of cases) {
+    const res = parseExpression(input, {
+      throwOnError: false,
+      maxNestingDepth: 0,
+    });
+    assertEquals(res, {
+      success: false,
+      error: { message: "parse nesting limit exceeded", index },
+    });
+  }
+});
+
+test("parseExpression preserves unterminated comment and string failures", () => {
+  const cases = [
+    {
+      input: "1 /* ([? \" '",
+      message: "expected */ at 1:13",
+      index: 12,
+    },
+    {
+      input: '"// /* ([? \\"',
+      message: 'expected " at 1:14',
+      index: 13,
+    },
+    {
+      input: "'// /* ([? \\'",
+      message: "expected ' at 1:14",
+      index: 13,
+    },
+  ];
+
+  for (const { input, message, index } of cases) {
+    const res = parseExpression(input, {
+      throwOnError: false,
+      maxNestingDepth: 0,
+    });
+    assertEquals(res, { success: false, error: { message, index } });
+  }
+});
+
+test("parseExpression resets conditional depth after a comma", () => {
+  const res = parseExpression("[a ? b : c, d ? e : f]", {
+    throwOnError: false,
+    maxNestingDepth: 2,
+  });
+
   assertEquals(res.success, true);
 });
 
-test("parseExpression distinguishes nullish operators from conditionals", () => {
-  const res = parseExpression("null ?? undefined", {
+test("parseExpression enforces the exact nesting boundary and error index", () => {
+  const boundary = parseExpression("((1))", {
     throwOnError: false,
-    maxNestingDepth: 0,
+    maxNestingDepth: 2,
   });
-  assertEquals(res.success, true);
+  assertEquals(boundary.success, true);
+
+  const exceeded = parseExpression("((1))", {
+    throwOnError: false,
+    maxNestingDepth: 1,
+  });
+  assertEquals(exceeded, {
+    success: false,
+    error: { message: "parse nesting limit exceeded", index: 1 },
+  });
 });
 
 test("parseExpression enforces AST node limits", () => {
