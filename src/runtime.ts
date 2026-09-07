@@ -286,10 +286,10 @@ export const normalizeEnv = (
     });
     if (!normalized.ok) return normalized;
     return { ok: true, env: normalized.value as Env };
-  } catch (error) {
+  } catch {
     return {
       ok: false,
-      message: error instanceof Error ? error.message : String(error),
+      message: "environment inspection failed",
     };
   }
 };

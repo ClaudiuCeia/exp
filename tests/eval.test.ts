@@ -279,7 +279,114 @@ test("evaluateExpression catches env function exceptions", () => {
   });
   assertEquals(res.success, false);
   if (res.success) return;
-  assertMatch(res.error.message, /kaboom/);
+  assertEquals(res.error.message, "kaboom");
+});
+
+test("evaluateExpression does not coerce hostile function exceptions", () => {
+  let coercions = 0;
+  const thrown = {
+    get message(): string {
+      coercions++;
+      throw new Error("message getter ran");
+    },
+    toString(): string {
+      coercions++;
+      throw new Error("toString ran");
+    },
+  };
+
+  const res = evaluateExpression("boom()", {
+    throwOnError: false,
+    env: {
+      boom: () => {
+        throw thrown;
+      },
+    },
+  });
+
+  assertEquals(res.success, false);
+  assertEquals(coercions, 0);
+  if (res.success) return;
+  assertEquals(res.error.message, "unknown thrown value");
+});
+
+test("evaluateExpression contains nested exception-description failures", () => {
+  const thrown = new Proxy<Record<string, unknown>>(
+    {},
+    {
+      getOwnPropertyDescriptor() {
+        throw new Error("message inspection ran");
+      },
+    },
+  );
+
+  const res = evaluateExpression("boom()", {
+    throwOnError: false,
+    env: {
+      boom: () => {
+        throw thrown;
+      },
+    },
+  });
+
+  assertEquals(res.success, false);
+  if (res.success) return;
+  assertEquals(res.error.message, "unknown thrown value");
+});
+
+test("evaluateExpression does not depend on the global String function", () => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "String");
+  if (descriptor === undefined) throw new Error("missing global String");
+
+  try {
+    Object.defineProperty(globalThis, "String", {
+      ...descriptor,
+      value: () => {
+        throw new Error("global String ran");
+      },
+    });
+    const res = evaluateExpression("boom()", {
+      throwOnError: false,
+      env: {
+        boom: () => {
+          throw 7;
+        },
+      },
+    });
+
+    assertEquals(res.success, false);
+    if (res.success) return;
+    assertEquals(res.error.message, "7");
+  } finally {
+    Object.defineProperty(globalThis, "String", descriptor);
+  }
+});
+
+test("evaluateExpression reports primitive function exceptions deterministically", () => {
+  const cases: readonly (readonly [unknown, string])[] = [
+    [undefined, "undefined"],
+    [null, "null"],
+    [false, "false"],
+    [42, "42"],
+    [42n, "42"],
+    ["failed", "failed"],
+    [Symbol("failed"), "unknown thrown value"],
+  ];
+
+  for (const [thrown, message] of cases) {
+    const res = evaluateExpression("boom()", {
+      throwOnError: false,
+      env: {
+        boom: () => {
+          throw thrown;
+        },
+      },
+    });
+
+    assertEquals(res.success, false);
+    if (res.success) continue;
+    assertEquals(res.error.message, message);
+  }
 });
 
 test("evaluateExpression rejects unsupported function return values", () => {
@@ -502,6 +609,68 @@ test("evaluateExpression rejects accessors in cyclic environments", () => {
   assertEquals(called, 0);
   if (res.success) return;
   assertMatch(res.error.message, /data property/);
+});
+
+test("evaluateExpression contains hostile environment inspection exceptions", () => {
+  let coercions = 0;
+  const thrown = {
+    toString(): string {
+      coercions++;
+      throw new Error("toString ran");
+    },
+  };
+  const env = new Proxy<Record<string, RuntimeValue>>(
+    {},
+    {
+      getPrototypeOf() {
+        throw thrown;
+      },
+    },
+  );
+
+  const res = evaluateExpression("1", {
+    env,
+    throwOnError: false,
+  });
+
+  assertEquals(res.success, false);
+  assertEquals(coercions, 0);
+  if (res.success) return;
+  assertEquals(res.error.message, "environment inspection failed");
+  assertEquals(res.error.steps, 0);
+});
+
+test("evaluateExpression contains post-normalization intrinsic failures", () => {
+  const descriptor = Object.getOwnPropertyDescriptor(Object, "hasOwn");
+  if (descriptor === undefined) throw new Error("missing Object.hasOwn");
+  const env = new Proxy<Record<string, RuntimeValue>>(
+    {},
+    {
+      getPrototypeOf(target) {
+        Object.defineProperty(Object, "hasOwn", {
+          ...descriptor,
+          value: () => {
+            throw new Error("Object.hasOwn ran");
+          },
+        });
+        return Reflect.getPrototypeOf(target);
+      },
+    },
+  );
+
+  try {
+    const res = evaluateExpression("1", {
+      env,
+      throwOnError: false,
+    });
+
+    assertEquals(res.success, false);
+    if (res.success) return;
+    assertEquals(res.error.message, "evaluation setup failed");
+    assertEquals(res.error.steps, 0);
+  } finally {
+    Reflect.defineProperty(Object, "hasOwn", descriptor);
+  }
 });
 
 test("evaluateExpression bounds runtime value normalization", () => {
@@ -871,6 +1040,96 @@ test("evaluateAst rejects accessors without invoking them", () => {
   assertEquals(called, 0);
   if (res.success) return;
   assertMatch(res.error.message, /data property/);
+});
+
+test("evaluateAst contains hostile validation exceptions", () => {
+  let coercions = 0;
+  const thrown = {
+    toString(): string {
+      coercions++;
+      throw new Error("toString ran");
+    },
+  };
+  const expr = new Proxy<Record<string, unknown>>(
+    {},
+    {
+      getOwnPropertyDescriptor() {
+        throw thrown;
+      },
+    },
+  );
+
+  const res = evaluateAst(expr as unknown as Expr, { throwOnError: false });
+
+  assertEquals(res.success, false);
+  assertEquals(coercions, 0);
+  if (res.success) return;
+  assertEquals(res.error.message, "invalid AST: inspection failed");
+  assertEquals(res.error.steps, 1);
+});
+
+test("evaluateAst contains hostile property reads after validation", () => {
+  let coercions = 0;
+  const thrown = {
+    toString(): string {
+      coercions++;
+      throw new Error("toString ran");
+    },
+  };
+  const target: Expr = {
+    kind: "number",
+    value: 1,
+    span: { start: 0, end: 1 },
+  };
+  const expr = new Proxy(target, {
+    get(value, property, receiver) {
+      if (property === "span") throw thrown;
+      return Reflect.get(value, property, receiver);
+    },
+  });
+
+  const res = evaluateAst(expr, { throwOnError: false });
+
+  assertEquals(res.success, false);
+  assertEquals(coercions, 0);
+  if (res.success) return;
+  assertEquals(res.error.message, "unknown thrown value");
+  assertEquals(res.error.steps, 0);
+  assertEquals(res.error.span, undefined);
+});
+
+test("evaluateAst contains post-validation intrinsic failures", () => {
+  const descriptor = Object.getOwnPropertyDescriptor(Object, "hasOwn");
+  if (descriptor === undefined) throw new Error("missing Object.hasOwn");
+  const target: Expr = {
+    kind: "number",
+    value: 1,
+    span: { start: 0, end: 1 },
+  };
+  const expr = new Proxy(target, {
+    getOwnPropertyDescriptor(value, property) {
+      if (property === "kind") {
+        Object.defineProperty(Object, "hasOwn", {
+          ...descriptor,
+          value: () => {
+            throw new Error("Object.hasOwn ran");
+          },
+        });
+      }
+      return Reflect.getOwnPropertyDescriptor(value, property);
+    },
+  });
+
+  try {
+    const res = evaluateAst(expr, { throwOnError: false });
+
+    assertEquals(res.success, false);
+    if (res.success) return;
+    assertEquals(res.error.message, "evaluation setup failed");
+    assertEquals(res.error.steps, 0);
+  } finally {
+    Reflect.defineProperty(Object, "hasOwn", descriptor);
+  }
 });
 
 test("evaluateAst bounds 100,000 aliased arguments by traversed edges", () => {
