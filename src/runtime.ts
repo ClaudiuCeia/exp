@@ -4,13 +4,13 @@ export type RuntimePrimitive = undefined | null | boolean | number | string;
 /** A function callable from expressions (must accept/return `RuntimeValue`). */
 export type RuntimeFunction = (...args: RuntimeValue[]) => RuntimeValue;
 
-/** A `RuntimeValue` array. */
-export interface RuntimeArray extends Array<RuntimeValue> {}
+/** A readonly array of `RuntimeValue` entries. */
+export interface RuntimeArray extends ReadonlyArray<RuntimeValue> {}
 
 /** A plain object mapping string keys to `RuntimeValue`. */
 export interface RuntimeObject {
   /** Own enumerable properties (prototype is ignored by the evaluator). */
-  [key: string]: RuntimeValue;
+  readonly [key: string]: RuntimeValue;
 }
 
 /**
@@ -27,15 +27,26 @@ export type RuntimeValue =
 
 export type Env = Record<string, RuntimeValue>;
 
-const plainObjectPrototype = Object.prototype;
+type MutableRuntimeArray = RuntimeValue[];
+type MutableRuntimeObject = { [key: string]: RuntimeValue };
+
+const ArrayConstructor = Array;
+const arrayFrom = Array.from;
+const arrayIsArray = Array.isArray;
+const objectCreate = Object.create;
+const objectDefineProperty = Object.defineProperty;
+const objectEntries = Object.entries;
+const objectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 const objectGetPrototypeOf = Object.getPrototypeOf;
+const objectPrototype = Object.prototype;
+const reflectOwnKeys = Reflect.ownKeys;
 
 export const isPlainObject = (
   value: unknown,
 ): value is Record<string, unknown> => {
   if (value === null || typeof value !== "object") return false;
   const proto = objectGetPrototypeOf(value);
-  return proto === plainObjectPrototype || proto === null;
+  return proto === objectPrototype || proto === null;
 };
 
 export type RuntimeValueLimits = Readonly<{
@@ -50,14 +61,7 @@ const weakSetAdd = WeakSet.prototype.add;
 const weakMapGet = WeakMap.prototype.get;
 const weakMapSet = WeakMap.prototype.set;
 const reflectApply = Reflect.apply;
-const reflectOwnKeys = Reflect.ownKeys;
-const arrayFrom = Array.from;
-const arrayIsArray = Array.isArray;
-const objectCreate = Object.create;
-const objectDefineProperty = Object.defineProperty;
-const objectEntries = Object.entries;
 const objectFreeze = Object.freeze;
-const objectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 
 const seenSetHas = (set: WeakSet<object>, value: object): boolean =>
   reflectApply(weakSetHas, set, [value]);
@@ -109,8 +113,8 @@ type RuntimePath =
   | Readonly<{ kind: "child"; parent: RuntimePath; segment: string }>;
 
 type NormalizeTarget =
-  | Readonly<{ kind: "array"; value: RuntimeArray; index: number }>
-  | Readonly<{ kind: "object"; value: RuntimeObject; key: string }>;
+  | Readonly<{ kind: "array"; value: MutableRuntimeArray; index: number }>
+  | Readonly<{ kind: "object"; value: MutableRuntimeObject; key: string }>;
 
 type ArrayFrameBase = Readonly<{
   kind: "array";
@@ -128,7 +132,7 @@ type ArrayFrame = ArrayFrameBase &
     | Readonly<{ mode: "validate" }>
     | Readonly<{
         mode: "normalize";
-        output: RuntimeArray;
+        output: MutableRuntimeArray;
         target: NormalizeTarget | undefined;
       }>
   );
@@ -148,7 +152,7 @@ type ObjectFrame = ObjectFrameBase &
     | Readonly<{ mode: "validate" }>
     | Readonly<{
         mode: "normalize";
-        output: RuntimeObject;
+        output: MutableRuntimeObject;
         target: NormalizeTarget | undefined;
       }>
   );
@@ -274,7 +278,11 @@ const traverseRuntimeValue = (
           if (!counted.ok) return counted;
 
           if (state.mode === "normalize") {
-            const output: RuntimeArray = arrayFrom({ length });
+            const output: MutableRuntimeArray = reflectApply(
+              arrayFrom,
+              ArrayConstructor,
+              [{ length }],
+            );
             seenMapSet(state.seen, currentValue, output);
             if (state.containers !== undefined) {
               seenSetAdd(state.containers, output);
@@ -311,14 +319,15 @@ const traverseRuntimeValue = (
             );
           }
 
-          let output: RuntimeObject | undefined;
+          let output: MutableRuntimeObject | undefined;
           if (state.mode === "normalize") {
-            output = objectCreate(null) as RuntimeObject;
+            output = objectCreate(null) as MutableRuntimeObject;
             seenMapSet(state.seen, currentValue, output);
             if (state.containers !== undefined) {
               seenSetAdd(state.containers, output);
             }
           }
+
           const descriptors = Object.getOwnPropertyDescriptors(currentValue);
           const counted = consumeEntries(
             state,
