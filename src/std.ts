@@ -10,16 +10,39 @@ const expectString = (v: RuntimeValue, name: string): string => {
   return v;
 };
 
+/** Exact public shape of the built-in standard library. */
+export type StandardLibrary = Readonly<{
+  len: (x: RuntimeValue) => number;
+  abs: (x: RuntimeValue) => number;
+  min: (a: RuntimeValue, b: RuntimeValue) => number;
+  max: (a: RuntimeValue, b: RuntimeValue) => number;
+  clamp: (x: RuntimeValue, lo: RuntimeValue, hi: RuntimeValue) => number;
+  floor: (x: RuntimeValue) => number;
+  ceil: (x: RuntimeValue) => number;
+  round: (x: RuntimeValue) => number;
+  trunc: (x: RuntimeValue) => number;
+  sqrt: (x: RuntimeValue) => number;
+  pow: (a: RuntimeValue, b: RuntimeValue) => number;
+  lower: (s: RuntimeValue) => string;
+  upper: (s: RuntimeValue) => string;
+  trim: (s: RuntimeValue) => string;
+  startsWith: (s: RuntimeValue, prefix: RuntimeValue) => boolean;
+  endsWith: (s: RuntimeValue, suffix: RuntimeValue) => boolean;
+  includes: (haystack: RuntimeValue, needle: RuntimeValue) => boolean;
+  slice: (s: RuntimeValue, start: RuntimeValue, end?: RuntimeValue) => string;
+}>;
+
 /**
  * Default standard library, always available as `std.*`.
  *
  * Deterministic, side-effect-free helpers only.
  */
-const stdValues: Record<string, RuntimeValue> = Object.assign(
-  Object.create(null),
+const stdValues: StandardLibrary = Object.assign(
+  // `object` avoids widening the assigned contract with an index signature.
+  Object.create(null) as object,
   {
     // Length helper.
-    len: (x: RuntimeValue): RuntimeValue => {
+    len: (x: RuntimeValue) => {
       if (typeof x === "string" || Array.isArray(x)) return x.length;
       throw new Error("std.len(x) expects a string or array");
     },
@@ -87,12 +110,11 @@ const stdValues: Record<string, RuntimeValue> = Object.assign(
       const b = expectNumber(end, "std.slice(s,start,end?)");
       return str.slice(a, b);
     },
-  } satisfies Record<string, RuntimeValue>,
+  } satisfies StandardLibrary,
 );
 
 for (const value of Object.values(stdValues)) {
   if (typeof value === "function") Object.freeze(value);
 }
 
-export const std: Readonly<Record<string, RuntimeValue>> =
-  Object.freeze(stdValues);
+export const std: StandardLibrary = Object.freeze(stdValues);

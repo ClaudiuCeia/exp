@@ -1,8 +1,49 @@
 import { test } from "bun:test";
 import { assertEquals, assertThrows } from "./assert.ts";
+import { std, type RuntimeValue, type StandardLibrary } from "../mod.ts";
 import { evaluateExpression } from "../src/eval.ts";
-import type { RuntimeValue } from "../src/runtime.ts";
-import { std } from "../src/std.ts";
+
+type Equal<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2
+    ? true
+    : false;
+
+type ExpectedStandardLibrary = Readonly<{
+  len: (x: RuntimeValue) => number;
+  abs: (x: RuntimeValue) => number;
+  min: (a: RuntimeValue, b: RuntimeValue) => number;
+  max: (a: RuntimeValue, b: RuntimeValue) => number;
+  clamp: (x: RuntimeValue, lo: RuntimeValue, hi: RuntimeValue) => number;
+  floor: (x: RuntimeValue) => number;
+  ceil: (x: RuntimeValue) => number;
+  round: (x: RuntimeValue) => number;
+  trunc: (x: RuntimeValue) => number;
+  sqrt: (x: RuntimeValue) => number;
+  pow: (a: RuntimeValue, b: RuntimeValue) => number;
+  lower: (s: RuntimeValue) => string;
+  upper: (s: RuntimeValue) => string;
+  trim: (s: RuntimeValue) => string;
+  startsWith: (s: RuntimeValue, prefix: RuntimeValue) => boolean;
+  endsWith: (s: RuntimeValue, suffix: RuntimeValue) => boolean;
+  includes: (haystack: RuntimeValue, needle: RuntimeValue) => boolean;
+  slice: (s: RuntimeValue, start: RuntimeValue, end?: RuntimeValue) => string;
+}>;
+
+const exactStandardLibraryType: Equal<
+  StandardLibrary,
+  ExpectedStandardLibrary
+> = true;
+
+test("std exposes exact function signatures through the public entrypoint", () => {
+  const typed: StandardLibrary = std;
+  const length: number = typed.len("abc");
+  const absolute: number = typed.abs(-2);
+  const startsWith: boolean = typed.startsWith("abc", "a");
+  const slice: string = typed.slice("abc", 1);
+
+  assertEquals(exactStandardLibraryType, true);
+  assertEquals([length, absolute, startsWith, slice], [3, 2, true, "bc"]);
+});
 
 test("std.len works for strings and arrays", () => {
   const a = evaluateExpression("std.len('abc')", { throwOnError: false });
