@@ -669,7 +669,7 @@ test("evaluateExpression forbids dangerous member access", () => {
     assertEquals(e instanceof ExpEvalError, true);
     if (e instanceof ExpEvalError) {
       assertEquals(typeof e.steps, "number");
-      assertEquals(e.steps! >= 1, true);
+      assertEquals(e.steps !== undefined && e.steps >= 1, true);
       assertEquals(!!e.span, true);
     }
   }
@@ -703,6 +703,58 @@ test("evaluateExpression enforces array literal size budgets", () => {
   assertMatch(res.error.message, /array literal too large/);
 });
 
+test("evaluateExpression enforces call argument size budgets", () => {
+  const env = {
+    count: (...args: RuntimeValue[]) => args.length,
+  };
+  const empty = evaluateExpression("count()", {
+    env,
+    throwOnError: false,
+    maxCallArguments: 0,
+  });
+  assertEquals(empty.success, true);
+  if (empty.success) assertEquals(empty.value, 0);
+
+  const exact = evaluateExpression("count(1, 2)", {
+    env,
+    throwOnError: false,
+    maxCallArguments: 2,
+  });
+  assertEquals(exact.success, true);
+  if (exact.success) assertEquals(exact.value, 2);
+
+  const over = evaluateExpression("count(1, 2, 3)", {
+    env,
+    throwOnError: false,
+    maxCallArguments: 2,
+  });
+  assertEquals(over.success, false);
+  if (over.success) return;
+  assertEquals(over.error.message, "invalid AST: call argument list too large");
+});
+
+test("evaluateExpression enforces the default call argument boundary", () => {
+  const argumentCount = 1_000;
+  const input = `count(${Array.from({ length: argumentCount }, () => "0").join(",")})`;
+  const res = evaluateExpression(input, {
+    env: { count: (...args: RuntimeValue[]) => args.length },
+    throwOnError: false,
+  });
+
+  assertEquals(res.success, true);
+  if (!res.success) return;
+  assertEquals(res.value, argumentCount);
+
+  const over = evaluateExpression(`${input.slice(0, -1)},0)`, {
+    env: { count: (...args: RuntimeValue[]) => args.length },
+    throwOnError: false,
+  });
+  assertEquals(over.success, false);
+  if (over.success) return;
+  assertEquals(over.error.message, "invalid AST: call argument list too large");
+  assertEquals(over.error.steps, 1);
+});
+
 test("evaluateExpression enforces recursion depth budgets", () => {
   const res = evaluateExpression("!true", {
     throwOnError: false,
@@ -718,6 +770,7 @@ test("evaluateExpression rejects invalid evaluation budgets", () => {
     { maxSteps: Number.NaN },
     { maxDepth: Number.POSITIVE_INFINITY },
     { maxArrayElements: -1 },
+    { maxCallArguments: -1 },
     { maxRuntimeDepth: 1.5 },
     { maxRuntimeEntries: -1 },
   ];
@@ -742,7 +795,7 @@ test("evaluateExpression reports parse failures when throwOnParseError=false", (
   assertEquals(res.success, false);
   if (res.success) return;
   assertEquals(typeof res.error.index, "number");
-  assertEquals(res.error.index! >= 0, true);
+  assertEquals(res.error.index !== undefined && res.error.index >= 0, true);
 });
 
 test("evaluateExpression forwards parser resource limits", () => {
@@ -820,6 +873,378 @@ test("evaluateAst rejects accessors without invoking them", () => {
   assertMatch(res.error.message, /data property/);
 });
 
+test("evaluateAst bounds 100,000 aliased arguments by traversed edges", () => {
+  const shared: Expr = {
+    kind: "number",
+    value: 1,
+    span: { start: 2, end: 3 },
+  };
+  const expr: Expr = {
+    kind: "call",
+    callee: {
+      kind: "identifier",
+      name: "fn",
+      span: { start: 0, end: 1 },
+    },
+    args: Array<Expr>(100_000).fill(shared),
+    span: { start: 0, end: 3 },
+  };
+
+  const res = evaluateAst(expr, {
+    throwOnError: false,
+    maxCallArguments: 100_000,
+    maxSteps: 1,
+  });
+  assertEquals(res.success, false);
+  if (res.success) return;
+  assertEquals(res.error.message, "invalid AST: validation budget exceeded");
+  assertEquals(res.error.steps, 2);
+});
+
+test("evaluateAst counts unique and aliased call argument edges", () => {
+  const callee: Expr = {
+    kind: "identifier",
+    name: "count",
+    span: { start: 0, end: 5 },
+  };
+  const uniqueArgs: Expr[] = Array.from({ length: 4 }, (_, index) => ({
+    kind: "number",
+    value: index,
+    span: { start: index + 6, end: index + 7 },
+  }));
+  const shared = uniqueArgs[0];
+  if (shared === undefined) throw new Error("missing test argument");
+  const cases: Expr[][] = [uniqueArgs, Array<Expr>(4).fill(shared)];
+
+  for (const args of cases) {
+    const expr: Expr = {
+      kind: "call",
+      callee,
+      args,
+      span: { start: 0, end: 10 },
+    };
+    const rejected = evaluateAst(expr, {
+      env: { count: (...values: RuntimeValue[]) => values.length },
+      throwOnError: false,
+      maxSteps: 5,
+    });
+    assertEquals(rejected.success, false);
+    if (!rejected.success) {
+      assertEquals(
+        rejected.error.message,
+        "invalid AST: validation budget exceeded",
+      );
+      assertEquals(rejected.error.steps, 6);
+    }
+
+    const accepted = evaluateAst(expr, {
+      env: { count: (...values: RuntimeValue[]) => values.length },
+      throwOnError: false,
+      maxSteps: 6,
+    });
+    assertEquals(accepted.success, true);
+    if (accepted.success) assertEquals(accepted.value, 4);
+  }
+});
+
+test("evaluateAst rejects sparse child arrays", () => {
+  const args: Expr[] = [];
+  args.length = 1;
+  const expr: Expr = {
+    kind: "call",
+    callee: {
+      kind: "identifier",
+      name: "fn",
+      span: { start: 0, end: 2 },
+    },
+    args,
+    span: { start: 0, end: 4 },
+  };
+
+  const res = evaluateAst(expr, { throwOnError: false });
+  assertEquals(res.success, false);
+  if (res.success) return;
+  assertEquals(
+    res.error.message,
+    "invalid AST: 'args[0]' must be an own data property",
+  );
+});
+
+test("evaluateAst rejects accessor child entries without invocation", () => {
+  let called = 0;
+  const elements: Expr[] = [];
+  elements.length = 1;
+  Object.defineProperty(elements, "0", {
+    configurable: true,
+    enumerable: true,
+    get() {
+      called++;
+      return {
+        kind: "number",
+        value: 1,
+        span: { start: 3, end: 4 },
+      } satisfies Expr;
+    },
+  });
+  const expr: Expr = {
+    kind: "array",
+    elements,
+    span: { start: 0, end: 5 },
+  };
+
+  const res = evaluateAst(expr, { throwOnError: false });
+  assertEquals(res.success, false);
+  assertEquals(called, 0);
+  if (res.success) return;
+  assertEquals(
+    res.error.message,
+    "invalid AST: 'elements[0]' must be an own data property",
+  );
+});
+
+test("evaluateAst rejects malformed child array descriptors", () => {
+  let argsPropertyCalled = 0;
+  const malformedProperty: Record<string, unknown> = {
+    kind: "call",
+    callee: {
+      kind: "identifier",
+      name: "fn",
+      span: { start: 0, end: 2 },
+    },
+    span: { start: 0, end: 4 },
+  };
+  Object.defineProperty(malformedProperty, "args", {
+    enumerable: true,
+    get() {
+      argsPropertyCalled++;
+      return [];
+    },
+  });
+  const propertyResult = evaluateAst(malformedProperty as unknown as Expr, {
+    throwOnError: false,
+  });
+  assertEquals(propertyResult.success, false);
+  assertEquals(argsPropertyCalled, 0);
+  if (!propertyResult.success) {
+    assertEquals(
+      propertyResult.error.message,
+      "invalid AST: 'args' must be an own data property",
+    );
+  }
+
+  const child: Expr = {
+    kind: "number",
+    value: 1,
+    span: { start: 3, end: 4 },
+  };
+  const malformedLength = new Proxy<Expr[]>([child], {
+    getOwnPropertyDescriptor(target, property) {
+      if (property === "length") {
+        return {
+          configurable: false,
+          enumerable: false,
+          value: "1",
+          writable: true,
+        };
+      }
+      return Reflect.getOwnPropertyDescriptor(target, property);
+    },
+  });
+  const lengthResult = evaluateAst(
+    {
+      kind: "call",
+      callee: {
+        kind: "identifier",
+        name: "fn",
+        span: { start: 0, end: 2 },
+      },
+      args: malformedLength,
+      span: { start: 0, end: 5 },
+    },
+    { throwOnError: false },
+  );
+  assertEquals(lengthResult.success, false);
+  if (lengthResult.success) return;
+  assertEquals(
+    lengthResult.error.message,
+    "invalid AST: 'args.length' must be a non-negative safe integer",
+  );
+});
+
+test("evaluateAst rejects oversized child arrays before reading entries", () => {
+  const child: Expr = {
+    kind: "number",
+    value: 1,
+    span: { start: 1, end: 2 },
+  };
+  let elementReads = 0;
+  const elements = new Proxy<Expr[]>([child, child], {
+    getOwnPropertyDescriptor(target, property) {
+      if (property === "0" || property === "1") elementReads++;
+      return Reflect.getOwnPropertyDescriptor(target, property);
+    },
+  });
+  const arrayResult = evaluateAst(
+    {
+      kind: "array",
+      elements,
+      span: { start: 0, end: 3 },
+    },
+    { throwOnError: false, maxArrayElements: 1 },
+  );
+  assertEquals(arrayResult.success, false);
+  assertEquals(elementReads, 0);
+  if (!arrayResult.success) {
+    assertEquals(
+      arrayResult.error.message,
+      "invalid AST: array literal too large",
+    );
+  }
+
+  let argumentReads = 0;
+  const args = new Proxy<Expr[]>([child, child], {
+    getOwnPropertyDescriptor(target, property) {
+      if (property === "0" || property === "1") argumentReads++;
+      return Reflect.getOwnPropertyDescriptor(target, property);
+    },
+  });
+  const callResult = evaluateAst(
+    {
+      kind: "call",
+      callee: {
+        kind: "identifier",
+        name: "fn",
+        span: { start: 0, end: 2 },
+      },
+      args,
+      span: { start: 0, end: 4 },
+    },
+    { throwOnError: false, maxCallArguments: 1 },
+  );
+  assertEquals(callResult.success, false);
+  assertEquals(argumentReads, 0);
+  if (!callResult.success) {
+    assertEquals(
+      callResult.error.message,
+      "invalid AST: call argument list too large",
+    );
+  }
+});
+
+test("evaluateAst stops reading child descriptors when validation work is exhausted", () => {
+  const child: Expr = {
+    kind: "number",
+    value: 1,
+    span: { start: 3, end: 4 },
+  };
+  const inspected: string[] = [];
+  const args = new Proxy<Expr[]>([child, child, child], {
+    getOwnPropertyDescriptor(target, property) {
+      if (property === "0" || property === "1" || property === "2") {
+        inspected.push(property);
+      }
+      return Reflect.getOwnPropertyDescriptor(target, property);
+    },
+  });
+  const expr: Expr = {
+    kind: "call",
+    callee: {
+      kind: "identifier",
+      name: "fn",
+      span: { start: 0, end: 2 },
+    },
+    args,
+    span: { start: 0, end: 5 },
+  };
+
+  const res = evaluateAst(expr, { throwOnError: false, maxSteps: 2 });
+  assertEquals(res.success, false);
+  assertEquals(inspected, ["0"]);
+  if (res.success) return;
+  assertEquals(res.error.message, "invalid AST: validation budget exceeded");
+  assertEquals(res.error.steps, 3);
+});
+
+test("evaluateAst counts edges through aliased child arrays", () => {
+  const leaf: Expr = {
+    kind: "number",
+    value: 1,
+    span: { start: 1, end: 2 },
+  };
+  const sharedElements = [leaf];
+  const consequent: Expr = {
+    kind: "array",
+    elements: sharedElements,
+    span: { start: 0, end: 3 },
+  };
+  const alternate: Expr = {
+    kind: "array",
+    elements: sharedElements,
+    span: { start: 4, end: 7 },
+  };
+  const expr: Expr = {
+    kind: "conditional",
+    test: { kind: "boolean", value: true, span: { start: 0, end: 1 } },
+    consequent,
+    alternate,
+    span: { start: 0, end: 7 },
+  };
+
+  const rejected = evaluateAst(expr, {
+    throwOnError: false,
+    maxSteps: 5,
+  });
+  assertEquals(rejected.success, false);
+  if (!rejected.success) {
+    assertEquals(
+      rejected.error.message,
+      "invalid AST: validation budget exceeded",
+    );
+    assertEquals(rejected.error.steps, 6);
+  }
+
+  const accepted = evaluateAst(expr, {
+    throwOnError: false,
+    maxSteps: 6,
+  });
+  assertEquals(accepted.success, true);
+  if (accepted.success) assertEquals(accepted.value, [1]);
+});
+
+test("evaluateAst enforces depth on every path to a shared node", () => {
+  const shared: Expr = {
+    kind: "number",
+    value: 1,
+    span: { start: 0, end: 1 },
+  };
+  const expr: Expr = {
+    kind: "conditional",
+    test: { kind: "boolean", value: true, span: { start: 0, end: 1 } },
+    consequent: shared,
+    alternate: {
+      kind: "unary",
+      op: "!",
+      expr: {
+        kind: "unary",
+        op: "!",
+        expr: shared,
+        span: { start: 0, end: 1 },
+      },
+      span: { start: 0, end: 1 },
+    },
+    span: { start: 0, end: 1 },
+  };
+
+  const res = evaluateAst(expr, {
+    throwOnError: false,
+    maxDepth: 2,
+  });
+  assertEquals(res.success, false);
+  if (res.success) return;
+  assertEquals(res.error.message, "invalid AST: recursion limit exceeded");
+  assertEquals(res.error.steps, 6);
+});
+
 test("evaluateAst rejects cyclic ASTs", () => {
   const expr: Record<string, unknown> = {
     kind: "unary",
@@ -831,7 +1256,8 @@ test("evaluateAst rejects cyclic ASTs", () => {
   const res = evaluateAst(expr as unknown as Expr, { throwOnError: false });
   assertEquals(res.success, false);
   if (res.success) return;
-  assertMatch(res.error.message, /cycle detected/);
+  assertEquals(res.error.message, "invalid AST: cycle detected");
+  assertEquals(res.error.steps, 2);
 });
 
 test("evaluateAst wraps malformed AST errors in throwing mode", () => {

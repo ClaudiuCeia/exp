@@ -397,16 +397,17 @@ from untrusted sources.
 
 ## Resource limits
 
-| Limit               |   Default | Covers                                             |
-| ------------------- | --------: | -------------------------------------------------- |
-| `maxInputLength`    | `100_000` | UTF-16 code units in expression source             |
-| `maxNestingDepth`   |      `64` | Parentheses, arrays, and conditional nesting       |
-| `maxNodes`          |  `10_000` | AST node allocations during parsing                |
-| `maxSteps`          |  `10_000` | AST validation and nodes visited during evaluation |
-| `maxDepth`          |     `256` | AST validation and interpreter recursion depth     |
-| `maxArrayElements`  |   `1_000` | Elements in one array literal                      |
-| `maxRuntimeDepth`   |      `64` | Environment and function-return graph depth        |
-| `maxRuntimeEntries` |  `10_000` | Environment and function-return graph entries      |
+| Limit               |   Default | Covers                                         |
+| ------------------- | --------: | ---------------------------------------------- |
+| `maxInputLength`    | `100_000` | UTF-16 code units in expression source         |
+| `maxNestingDepth`   |      `64` | Parentheses, arrays, and conditional nesting   |
+| `maxNodes`          |  `10_000` | AST node allocations during parsing            |
+| `maxSteps`          |  `10_000` | AST validation work and evaluation node visits |
+| `maxDepth`          |     `256` | AST validation and interpreter recursion depth |
+| `maxArrayElements`  |   `1_000` | Elements in one array literal                  |
+| `maxCallArguments`  |   `1_000` | Arguments in one call expression               |
+| `maxRuntimeDepth`   |      `64` | Environment and function-return graph depth    |
+| `maxRuntimeEntries` |  `10_000` | Environment and function-return graph entries  |
 
 The `maxNestingDepth` preflight scans the source once. Delimiters and
 conditional markers inside strings and comments do not count toward the limit.
@@ -415,10 +416,14 @@ allocated, and parsing stops at the first node that would exceed it. Transient
 nodes that are later replaced or discarded during parsing also count, so this
 can exceed the number of nodes reachable from the returned AST.
 
-These counters bound parser construction and AST traversal. They do not bound
-every individual operation, string size, numeric magnitude, or work inside
-application-provided functions. They are not a timeout. `maxSteps` counts AST
-work. It does not interrupt a slow environment function.
+These counters bound parser construction and AST traversal. Validation and
+evaluation each receive the configured `maxSteps` budget independently.
+Validation charges the root and every traversed AST edge, including repeated
+edges to a shared acyclic node; evaluation charges every node visit. Child-array
+and call-argument lengths are checked before their entries are traversed. These
+limits do not bound every individual operation, string size, numeric magnitude,
+or work inside application-provided functions. They are not a timeout and do
+not interrupt a slow environment function.
 
 ## Persisted expressions
 
