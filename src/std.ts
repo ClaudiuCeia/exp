@@ -90,5 +90,9 @@ const stdValues: Record<string, RuntimeValue> = Object.assign(
   } satisfies Record<string, RuntimeValue>,
 );
 
+for (const value of Object.values(stdValues)) {
+  if (typeof value === "function") Object.freeze(value);
+}
+
 export const std: Readonly<Record<string, RuntimeValue>> =
   Object.freeze(stdValues);

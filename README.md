@@ -343,8 +343,8 @@ std.includes
 std.slice
 ```
 
-The built-in `std` functions are deterministic and side-effect-free. `env.std`
-is reserved.
+The built-in `std` functions are deterministic, side-effect-free, and frozen
+together with their namespace. `env.std` is reserved.
 
 An expression can call functions supplied in `env`. Those functions run with
 the same authority as the application and may access values captured by their

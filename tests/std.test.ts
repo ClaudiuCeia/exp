@@ -79,3 +79,23 @@ test("std cannot be mutated by consumers", () => {
   if (!res.success) return;
   assertEquals(res.value, 1);
 });
+
+test("std functions cannot be shadowed or reparented by consumers", () => {
+  const len = std.len;
+  if (typeof len !== "function") throw new Error("missing std.len");
+
+  assertEquals(Object.isFrozen(len), true);
+  assertThrows(() => {
+    Object.defineProperty(len, "apply", {
+      value: () => 999,
+    });
+  }, TypeError);
+  assertThrows(() => {
+    Object.setPrototypeOf(len, null);
+  }, TypeError);
+
+  const res = evaluateExpression("std.len([1])", { throwOnError: false });
+  assertEquals(res.success, true);
+  if (!res.success) return;
+  assertEquals(res.value, 1);
+});
