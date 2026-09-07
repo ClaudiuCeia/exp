@@ -9,6 +9,7 @@ import {
   prepareEnv,
   type Env,
   type RuntimeFunction,
+  type RuntimeArray,
   type RuntimePrimitive,
   type RuntimeValue,
 } from "./runtime.ts";
@@ -229,7 +230,7 @@ const consumeWork = (ctx: Ctx, units: number): void => {
   if (!reserveWork(ctx, units)) throw new EvaluationBudgetExceeded();
 };
 
-const isRuntimeArray = (value: RuntimeValue): value is RuntimeValue[] => {
+const isRuntimeArray = (value: RuntimeValue): value is RuntimeArray => {
   try {
     return arrayIsArray(value);
   } catch {
@@ -455,9 +456,7 @@ const getMember = (obj: RuntimeValue, prop: string, ctx: Ctx): RuntimeValue => {
 
     let descriptor: PropertyDescriptor | undefined;
     try {
-      descriptor = ownerIsImmutable
-        ? objectGetOwnPropertyDescriptor(obj, "length")
-        : Object.getOwnPropertyDescriptor(obj, "length");
+      descriptor = objectGetOwnPropertyDescriptor(obj, "length");
     } catch {
       throw new Error(UNSUPPORTED_MEMBER_ERROR);
     }
@@ -477,9 +476,7 @@ const getMember = (obj: RuntimeValue, prop: string, ctx: Ctx): RuntimeValue => {
   }
 
   if (isPlainObject(obj)) {
-    const descriptor = ownerIsImmutable
-      ? objectGetOwnPropertyDescriptor(obj, prop)
-      : Object.getOwnPropertyDescriptor(obj, prop);
+    const descriptor = objectGetOwnPropertyDescriptor(obj, prop);
     if (descriptor === undefined || !descriptor.enumerable) return undefined;
     if (!("value" in descriptor)) {
       throw new Error("member must be an enumerable data property");
@@ -515,7 +512,7 @@ type UndefinedExpr = Extract<Expr, { kind: "undefined" }>;
 
 const evalIdentifierExpr = (expr: IdentifierExpr, ctx: Ctx): EvalResult => {
   consumeWork(ctx, expr.name.length);
-  if (Object.hasOwn(ctx.env, expr.name)) {
+  if (objectHasOwn(ctx.env, expr.name)) {
     return { success: true, value: ctx.env[expr.name] };
   }
   if (ctx.unknownIdentifier === "undefined") {
@@ -701,7 +698,7 @@ const includesString = (
 };
 
 const includesArray = (
-  haystack: RuntimeValue[],
+  haystack: RuntimeArray,
   needle: RuntimeValue,
   ctx: Ctx,
 ): boolean => {
@@ -906,7 +903,7 @@ const readAstProperty = (
   value: object,
   property: string,
 ): { ok: true; value: unknown } | { ok: false; message: string } => {
-  const descriptor = Object.getOwnPropertyDescriptor(value, property);
+  const descriptor = objectGetOwnPropertyDescriptor(value, property);
   if (descriptor === undefined || !("value" in descriptor)) {
     return { ok: false, message: `'${property}' must be an own data property` };
   }
@@ -948,7 +945,7 @@ const readAstChildren = (
     return { ok: false, message: `'${property}' must be an Array` };
   }
 
-  const lengthDescriptor = Object.getOwnPropertyDescriptor(
+  const lengthDescriptor = objectGetOwnPropertyDescriptor(
     field.value,
     "length",
   );
@@ -1045,7 +1042,7 @@ const validateAst = (
           if (frame.index >= frame.length) continue;
           const budget = chargeTraversal();
           if (budget !== null) return budget;
-          const child = Object.getOwnPropertyDescriptor(
+          const child = objectGetOwnPropertyDescriptor(
             frame.value,
             StringConstructor(frame.index),
           );
@@ -1316,7 +1313,7 @@ export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
 
   let res: EvalResult;
   try {
-    if (envRes !== undefined && Object.hasOwn(envRes.env, "std")) {
+    if (envRes !== undefined && objectHasOwn(envRes.env, "std")) {
       res = evalError(
         "env['std'] is reserved (stdlib is always available as std.*)",
         undefined,
@@ -1331,16 +1328,23 @@ export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
         if (envRes === undefined) {
           throw new Error("normalized environment is missing");
         }
-        env = Object.create(null) as Env;
-        Object.defineProperty(env, "std", {
+        env = objectCreate(null) as Env;
+        objectDefineProperty(env, "std", {
           value: std,
           enumerable: true,
           writable: true,
           configurable: true,
         });
         containerSetAdd(currentContainers, std);
-        for (const [key, value] of Object.entries(envRes.env)) {
-          Object.defineProperty(env, key, {
+        const entries = objectEntries(envRes.env);
+        for (let index = 0; index < entries.length; index++) {
+          const entry = entries[index];
+          if (entry === undefined) {
+            throw new Error("normalized environment entry is missing");
+          }
+          const key = entry[0];
+          const value = entry[1];
+          objectDefineProperty(env, key, {
             value,
             enumerable: true,
             writable: true,
