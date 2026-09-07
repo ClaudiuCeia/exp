@@ -6,9 +6,11 @@ import {
   checkRuntimeValue,
   isPlainObject,
   normalizeEnv,
+  normalizeRuntimeValue,
   prepareEnv,
   type Env,
   type RuntimeFunction,
+  type RuntimeArray,
   type RuntimePrimitive,
   type RuntimeValue,
 } from "./runtime.ts";
@@ -39,6 +41,7 @@ const objectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 const objectHasOwn = Object.hasOwn;
 const StringConstructor = String;
 const stringCharCodeAt = String.prototype.charCodeAt;
+const standardLibraryEntryCount = objectEntries(std).length;
 
 const assertNever = (_value: never): never => {
   throw new Error("unexpected operator");
@@ -212,6 +215,15 @@ const DEFAULT_MAX_CALL_ARGUMENTS = DEFAULT_MAX_ARRAY_ELEMENTS;
 const DEFAULT_MAX_RUNTIME_DEPTH = 64;
 const DEFAULT_MAX_RUNTIME_ENTRIES = 10_000;
 const UNSUPPORTED_MEMBER_ERROR = "member is not a supported runtime value";
+const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
+
+const saturatingAdd = (left: number, right: number): number =>
+  left > MAX_SAFE_INTEGER - right ? MAX_SAFE_INTEGER : left + right;
+
+const saturatingMultiply = (left: number, right: number): number =>
+  left !== 0 && right > MAX_SAFE_INTEGER / left
+    ? MAX_SAFE_INTEGER
+    : left * right;
 
 class EvaluationBudgetExceeded extends Error {
   constructor() {
@@ -233,7 +245,7 @@ const consumeWork = (ctx: Ctx, units: number): void => {
   if (!reserveWork(ctx, units)) throw new EvaluationBudgetExceeded();
 };
 
-const isRuntimeArray = (value: RuntimeValue): value is RuntimeValue[] => {
+const isRuntimeArray = (value: RuntimeValue): value is RuntimeArray => {
   try {
     return arrayIsArray(value);
   } catch {
@@ -459,9 +471,7 @@ const getMember = (obj: RuntimeValue, prop: string, ctx: Ctx): RuntimeValue => {
 
     let descriptor: PropertyDescriptor | undefined;
     try {
-      descriptor = ownerIsImmutable
-        ? objectGetOwnPropertyDescriptor(obj, "length")
-        : Object.getOwnPropertyDescriptor(obj, "length");
+      descriptor = objectGetOwnPropertyDescriptor(obj, "length");
     } catch {
       throw new Error(UNSUPPORTED_MEMBER_ERROR);
     }
@@ -481,9 +491,7 @@ const getMember = (obj: RuntimeValue, prop: string, ctx: Ctx): RuntimeValue => {
   }
 
   if (isPlainObject(obj)) {
-    const descriptor = ownerIsImmutable
-      ? objectGetOwnPropertyDescriptor(obj, prop)
-      : Object.getOwnPropertyDescriptor(obj, prop);
+    const descriptor = objectGetOwnPropertyDescriptor(obj, prop);
     if (descriptor === undefined || !descriptor.enumerable) return undefined;
     if (!("value" in descriptor)) {
       throw new Error("member must be an enumerable data property");
@@ -519,7 +527,7 @@ type UndefinedExpr = Extract<Expr, { kind: "undefined" }>;
 
 const evalIdentifierExpr = (expr: IdentifierExpr, ctx: Ctx): EvalResult => {
   consumeWork(ctx, expr.name.length);
-  if (Object.hasOwn(ctx.env, expr.name)) {
+  if (objectHasOwn(ctx.env, expr.name)) {
     return { success: true, value: ctx.env[expr.name] };
   }
   if (ctx.unknownIdentifier === "undefined") {
@@ -713,21 +721,11 @@ const includesString = (
 };
 
 const includesArray = (
-  haystack: RuntimeValue[],
+  haystack: RuntimeArray,
   needle: RuntimeValue,
   ctx: Ctx,
 ): boolean => {
-  const lengthDescriptor = objectGetOwnPropertyDescriptor(haystack, "length");
-  if (
-    lengthDescriptor === undefined ||
-    !("value" in lengthDescriptor) ||
-    typeof lengthDescriptor.value !== "number" ||
-    !numberIsSafeInteger(lengthDescriptor.value) ||
-    lengthDescriptor.value < 0
-  ) {
-    throw new Error("std.includes expects an Array length data property");
-  }
-  const length = lengthDescriptor.value;
+  const length = runtimeArrayLength(haystack, "std.includes");
   for (let index = 0; index < length; index++) {
     consumeWork(ctx, 1);
     const descriptor = objectGetOwnPropertyDescriptor(
@@ -741,6 +739,20 @@ const includesArray = (
     if (descriptor.value === needle) return true;
   }
   return false;
+};
+
+const runtimeArrayLength = (value: RuntimeArray, name: string): number => {
+  const lengthDescriptor = objectGetOwnPropertyDescriptor(value, "length");
+  if (
+    lengthDescriptor === undefined ||
+    !("value" in lengthDescriptor) ||
+    typeof lengthDescriptor.value !== "number" ||
+    !numberIsSafeInteger(lengthDescriptor.value) ||
+    lengthDescriptor.value < 0
+  ) {
+    throw new Error(`${name} expects an Array length data property`);
+  }
+  return lengthDescriptor.value;
 };
 
 const toSliceIndex = (value: number, length: number): number => {
@@ -773,6 +785,14 @@ const callStandardFunction = (
   const first = args[0];
   const second = args[1];
 
+  if (fn === std.len) {
+    if (typeof first === "string")
+      return { handled: true, value: first.length };
+    if (isRuntimeArray(first)) {
+      return { handled: true, value: runtimeArrayLength(first, "std.len") };
+    }
+    return { handled: true, value: invoke() };
+  }
   if (fn === std.lower || fn === std.upper || fn === std.trim) {
     if (typeof first === "string") consumeWork(ctx, first.length);
     return { handled: true, value: invoke() };
@@ -918,7 +938,7 @@ const readAstProperty = (
   value: object,
   property: string,
 ): { ok: true; value: unknown } | { ok: false; message: string } => {
-  const descriptor = Object.getOwnPropertyDescriptor(value, property);
+  const descriptor = objectGetOwnPropertyDescriptor(value, property);
   if (descriptor === undefined || !("value" in descriptor)) {
     return { ok: false, message: `'${property}' must be an own data property` };
   }
@@ -960,7 +980,7 @@ const readAstChildren = (
     return { ok: false, message: `'${property}' must be an Array` };
   }
 
-  const lengthDescriptor = Object.getOwnPropertyDescriptor(
+  const lengthDescriptor = objectGetOwnPropertyDescriptor(
     field.value,
     "length",
   );
@@ -1057,7 +1077,7 @@ const validateAst = (
           if (frame.index >= frame.length) continue;
           const budget = chargeTraversal();
           if (budget !== null) return budget;
-          const child = Object.getOwnPropertyDescriptor(
+          const child = objectGetOwnPropertyDescriptor(
             frame.value,
             StringConstructor(frame.index),
           );
@@ -1341,8 +1361,9 @@ export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
   }
 
   let res: EvalResult;
+  let resultSteps = 0;
   try {
-    if (envRes !== undefined && Object.hasOwn(envRes.env, "std")) {
+    if (envRes !== undefined && objectHasOwn(envRes.env, "std")) {
       res = evalError(
         "env['std'] is reserved (stdlib is always available as std.*)",
         undefined,
@@ -1357,16 +1378,23 @@ export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
         if (envRes === undefined) {
           throw new Error("normalized environment is missing");
         }
-        env = Object.create(null) as Env;
-        Object.defineProperty(env, "std", {
+        env = objectCreate(null) as Env;
+        objectDefineProperty(env, "std", {
           value: std,
           enumerable: true,
           writable: true,
           configurable: true,
         });
         containerSetAdd(currentContainers, std);
-        for (const [key, value] of Object.entries(envRes.env)) {
-          Object.defineProperty(env, key, {
+        const entries = objectEntries(envRes.env);
+        for (let index = 0; index < entries.length; index++) {
+          const entry = entries[index];
+          if (entry === undefined) {
+            throw new Error("normalized environment entry is missing");
+          }
+          const key = entry[0];
+          const value = entry[1];
+          objectDefineProperty(env, key, {
             value,
             enumerable: true,
             writable: true,
@@ -1393,12 +1421,44 @@ export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
         unknownIdentifier: opts.unknownIdentifier ?? "error",
       };
       res = evalExpr(expr, ctx);
+      resultSteps = ctx.steps;
     }
   } catch {
     res = evalError("evaluation setup failed", undefined, 0);
   }
 
-  if (res.success) return res;
+  if (res.success) {
+    const resultMaxEntries = saturatingAdd(
+      saturatingAdd(maxRuntimeEntries, standardLibraryEntryCount),
+      saturatingMultiply(maxSteps, saturatingAdd(maxRuntimeEntries, 1)),
+    );
+    let normalizationSteps = 0;
+    const normalized = normalizeRuntimeValue(
+      res.value,
+      {
+        maxDepth: saturatingAdd(maxDepth, maxRuntimeDepth),
+        maxEntries: resultMaxEntries,
+      },
+      (units) => {
+        if (units > maxSteps - normalizationSteps) {
+          normalizationSteps = maxSteps + 1;
+          return false;
+        }
+        normalizationSteps += units;
+        return true;
+      },
+    );
+    if (normalized.ok) return { success: true, value: normalized.value };
+    const error: EvalError = {
+      message:
+        normalized.reason === "budget"
+          ? "evaluation budget exceeded"
+          : "evaluation result is not a supported runtime value",
+      steps: normalized.reason === "budget" ? normalizationSteps : resultSteps,
+    };
+    if (throwOnError) throw new ExpEvalError(error);
+    return { success: false, error };
+  }
   if (throwOnError) throw new ExpEvalError(res.error);
   return res;
 }
