@@ -72,9 +72,10 @@ Environment functions can:
 - allocate memory
 - return different values across calls
 
-Function work is not counted by `maxSteps`. Return values are validated only
-after the function returns. A Promise return is unsupported, but the function
-has already run by the time that return is rejected.
+Function work is not counted by `maxSteps`. Return values are validated and
+charged to the evaluation work budget only after the function returns. A Promise
+return is unsupported, but the function has already run by the time that return
+is rejected.
 
 TypeScript parameter annotations on host functions do not constrain expression
 arguments. A host function that requires narrower values must validate them.
@@ -106,13 +107,17 @@ The package has no built-in:
 AST validation and evaluation each receive an independent `maxSteps` budget.
 Validation charges the root and every traversed AST edge, even when multiple
 edges reference the same shared acyclic node. Evaluation charges every node
-visit. `maxArrayElements` and `maxCallArguments` reject oversized child arrays
-before individual entries are inspected. `maxRuntimeDepth` and
-`maxRuntimeEntries` limit supported environment and function-return graphs.
-Runtime graph traversal is iterative, so configured depths are not limited by
-the JavaScript call stack. None of these options interrupts host function work.
-String length and work inside standard string helpers are not metered by
-`maxSteps`.
+visit plus variable-size identifier and member lookup, coercion, string,
+standard-library, and function-return or member revalidation work. Those runtime
+graph traversals share the cumulative evaluation budget rather than receiving a
+fresh allowance. Initial environment normalization remains bounded by
+`maxRuntimeDepth` and `maxRuntimeEntries`, not `maxSteps`.
+`maxArrayElements` and `maxCallArguments` reject oversized child arrays before
+individual entries are inspected. `maxRuntimeDepth` and `maxRuntimeEntries`
+limit supported environment and function-return graphs. Runtime graph traversal
+is iterative, so configured depths are not limited by the JavaScript call stack.
+None of these options interrupts host function work, Proxy traps, or native
+object-key enumeration.
 
 ## Isolation
 

@@ -1,5 +1,36 @@
 import type { RuntimeValue } from "./runtime.ts";
 
+const arrayIsArray = Array.isArray;
+const arraySome = Array.prototype.some;
+const mathAbs = Math.abs;
+const mathCeil = Math.ceil;
+const mathFloor = Math.floor;
+const mathMax = Math.max;
+const mathMin = Math.min;
+const mathPow = Math.pow;
+const mathRound = Math.round;
+const mathSqrt = Math.sqrt;
+const mathTrunc = Math.trunc;
+const reflectApply = Reflect.apply;
+const stringEndsWith = String.prototype.endsWith;
+const stringIncludes = String.prototype.includes;
+const stringSlice = String.prototype.slice;
+const stringStartsWith = String.prototype.startsWith;
+const stringToLowerCase = String.prototype.toLowerCase;
+const stringToUpperCase = String.prototype.toUpperCase;
+const stringTrim = String.prototype.trim;
+
+const callStringTransform = (
+  method: (this: string) => string,
+  value: string,
+): string => reflectApply(method, value, []);
+
+const callStringSearch = (
+  method: (this: string, search: string) => boolean,
+  value: string,
+  search: string,
+): boolean => reflectApply(method, value, [search]);
+
 const expectNumber = (v: RuntimeValue, name: string): number => {
   if (typeof v !== "number") throw new Error(`${name} expects numbers`);
   return v;
@@ -43,60 +74,62 @@ const stdValues: StandardLibrary = Object.assign(
   {
     // Length helper.
     len: (x: RuntimeValue) => {
-      if (typeof x === "string" || Array.isArray(x)) return x.length;
+      if (typeof x === "string" || arrayIsArray(x)) return x.length;
       throw new Error("std.len(x) expects a string or array");
     },
 
     // Math.
-    abs: (x: RuntimeValue) => Math.abs(expectNumber(x, "std.abs(x)")),
+    abs: (x: RuntimeValue) => mathAbs(expectNumber(x, "std.abs(x)")),
     min: (a: RuntimeValue, b: RuntimeValue) =>
-      Math.min(
-        expectNumber(a, "std.min(a,b)"),
-        expectNumber(b, "std.min(a,b)"),
-      ),
+      mathMin(expectNumber(a, "std.min(a,b)"), expectNumber(b, "std.min(a,b)")),
     max: (a: RuntimeValue, b: RuntimeValue) =>
-      Math.max(
-        expectNumber(a, "std.max(a,b)"),
-        expectNumber(b, "std.max(a,b)"),
-      ),
+      mathMax(expectNumber(a, "std.max(a,b)"), expectNumber(b, "std.max(a,b)")),
     clamp: (x: RuntimeValue, lo: RuntimeValue, hi: RuntimeValue) => {
       const nx = expectNumber(x, "std.clamp(x,lo,hi)");
       const nlo = expectNumber(lo, "std.clamp(x,lo,hi)");
       const nhi = expectNumber(hi, "std.clamp(x,lo,hi)");
-      return Math.min(nhi, Math.max(nlo, nx));
+      return mathMin(nhi, mathMax(nlo, nx));
     },
-    floor: (x: RuntimeValue) => Math.floor(expectNumber(x, "std.floor(x)")),
-    ceil: (x: RuntimeValue) => Math.ceil(expectNumber(x, "std.ceil(x)")),
-    round: (x: RuntimeValue) => Math.round(expectNumber(x, "std.round(x)")),
-    trunc: (x: RuntimeValue) => Math.trunc(expectNumber(x, "std.trunc(x)")),
-    sqrt: (x: RuntimeValue) => Math.sqrt(expectNumber(x, "std.sqrt(x)")),
+    floor: (x: RuntimeValue) => mathFloor(expectNumber(x, "std.floor(x)")),
+    ceil: (x: RuntimeValue) => mathCeil(expectNumber(x, "std.ceil(x)")),
+    round: (x: RuntimeValue) => mathRound(expectNumber(x, "std.round(x)")),
+    trunc: (x: RuntimeValue) => mathTrunc(expectNumber(x, "std.trunc(x)")),
+    sqrt: (x: RuntimeValue) => mathSqrt(expectNumber(x, "std.sqrt(x)")),
     pow: (a: RuntimeValue, b: RuntimeValue) =>
-      Math.pow(
-        expectNumber(a, "std.pow(a,b)"),
-        expectNumber(b, "std.pow(a,b)"),
-      ),
+      mathPow(expectNumber(a, "std.pow(a,b)"), expectNumber(b, "std.pow(a,b)")),
 
     // Strings.
-    lower: (s: RuntimeValue) => expectString(s, "std.lower(s)").toLowerCase(),
-    upper: (s: RuntimeValue) => expectString(s, "std.upper(s)").toUpperCase(),
-    trim: (s: RuntimeValue) => expectString(s, "std.trim(s)").trim(),
+    lower: (s: RuntimeValue) =>
+      callStringTransform(stringToLowerCase, expectString(s, "std.lower(s)")),
+    upper: (s: RuntimeValue) =>
+      callStringTransform(stringToUpperCase, expectString(s, "std.upper(s)")),
+    trim: (s: RuntimeValue) =>
+      callStringTransform(stringTrim, expectString(s, "std.trim(s)")),
     startsWith: (s: RuntimeValue, prefix: RuntimeValue) =>
-      expectString(s, "std.startsWith(s,prefix)").startsWith(
+      callStringSearch(
+        stringStartsWith,
+        expectString(s, "std.startsWith(s,prefix)"),
         expectString(prefix, "std.startsWith(s,prefix)"),
       ),
     endsWith: (s: RuntimeValue, suffix: RuntimeValue) =>
-      expectString(s, "std.endsWith(s,suffix)").endsWith(
+      callStringSearch(
+        stringEndsWith,
+        expectString(s, "std.endsWith(s,suffix)"),
         expectString(suffix, "std.endsWith(s,suffix)"),
       ),
     includes: (haystack: RuntimeValue, needle: RuntimeValue) => {
       if (typeof haystack === "string") {
-        return haystack.includes(
+        return callStringSearch(
+          stringIncludes,
+          haystack,
           expectString(needle, "std.includes(haystack,needle)"),
         );
       }
 
-      if (Array.isArray(haystack)) {
-        return haystack.some((x) => x === needle);
+      if (arrayIsArray(haystack)) {
+        return reflectApply(arraySome, haystack, [
+          (value: RuntimeValue) => value === needle,
+        ]);
       }
 
       throw new Error(
@@ -106,9 +139,9 @@ const stdValues: StandardLibrary = Object.assign(
     slice: (s: RuntimeValue, start: RuntimeValue, end?: RuntimeValue) => {
       const str = expectString(s, "std.slice(s,start,end?)");
       const a = expectNumber(start, "std.slice(s,start,end?)");
-      if (end === undefined) return str.slice(a);
+      if (end === undefined) return reflectApply(stringSlice, str, [a]);
       const b = expectNumber(end, "std.slice(s,start,end?)");
-      return str.slice(a, b);
+      return reflectApply(stringSlice, str, [a, b]);
     },
   } satisfies StandardLibrary,
 );

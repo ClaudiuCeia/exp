@@ -63,6 +63,7 @@ const weakMapGet = WeakMap.prototype.get;
 const weakMapSet = WeakMap.prototype.set;
 const reflectApply = Reflect.apply;
 const objectFreeze = Object.freeze;
+const StringConstructor = String;
 
 const seenSetHas = (set: WeakSet<object>, value: object): boolean =>
   reflectApply(weakSetHas, set, [value]);
@@ -91,12 +92,17 @@ type TraversalOk = Readonly<{
   entries: number;
 }>;
 type TraversalErr = Readonly<{ ok: false; message: string }>;
-type TraversalResult = TraversalOk | TraversalErr;
+type TraversalBudgetErr = Readonly<{ ok: false; budgetExceeded: true }>;
+type TraversalResult = TraversalOk | TraversalErr | TraversalBudgetErr;
+
+/** Consumes abstract evaluator work before runtime values are inspected. */
+export type RuntimeWorkConsumer = (units: number) => boolean;
 
 type TraversalBaseState = {
   entries: number;
   maxDepth: number;
   readonly limits: RuntimeValueLimits;
+  readonly consumeWork: RuntimeWorkConsumer | undefined;
 };
 
 type TraversalState = TraversalBaseState &
@@ -162,6 +168,15 @@ type TraversalFrame = ArrayFrame | ObjectFrame;
 
 type EntryResult = Readonly<{ ok: true }> | TraversalErr;
 
+const consumeWork = (
+  state: TraversalState,
+  units: number,
+): TraversalBudgetErr | null => {
+  return state.consumeWork !== undefined && !state.consumeWork(units)
+    ? { ok: false, budgetExceeded: true }
+    : null;
+};
+
 const formatRuntimePath = (path: RuntimePath): string => {
   let formatted = "";
   let current = path;
@@ -181,10 +196,12 @@ const consumeEntries = (
   state: TraversalState,
   count: number,
   path: RuntimePath,
-): EntryResult => {
+): EntryResult | TraversalBudgetErr => {
   if (count > state.limits.maxEntries - state.entries) {
     return traversalError(path, "exceeds the runtime entry limit");
   }
+  const budget = consumeWork(state, count);
+  if (budget !== null) return budget;
   state.entries += count;
   return { ok: true };
 };
@@ -243,6 +260,8 @@ const traverseRuntimeValue = (
       if (currentDepth > state.limits.maxDepth) {
         return traversalError(currentPath, "exceeds the runtime depth limit");
       }
+      const budget = consumeWork(state, 1);
+      if (budget !== null) return budget;
       if (currentDepth > state.maxDepth) state.maxDepth = currentDepth;
       if (typeof currentValue !== "object") {
         return traversalError(currentPath, "is not a supported runtime value");
@@ -388,7 +407,7 @@ const traverseRuntimeValue = (
         const index = frame.index;
         const descriptor = objectGetOwnPropertyDescriptor(
           frame.value,
-          String(index),
+          StringConstructor(index),
         );
         frame.index++;
         if (descriptor !== undefined && !("value" in descriptor)) {
@@ -492,22 +511,37 @@ const traverseRuntimeValue = (
   }
 };
 
-export const isRuntimeValue = (
+/** Validate a runtime value while optionally charging traversal work. */
+export const checkRuntimeValue = (
   value: unknown,
   limits: RuntimeValueLimits = { maxDepth: 64, maxEntries: 10_000 },
-): value is RuntimeValue => {
+  consume: RuntimeWorkConsumer | undefined = undefined,
+):
+  | Readonly<{ ok: true }>
+  | Readonly<{ ok: false; reason: "unsupported" | "budget" }> => {
   try {
-    return traverseRuntimeValue(value, "value", 0, {
+    const result = traverseRuntimeValue(value, "value", 0, {
       entries: 0,
       maxDepth: 0,
       limits,
+      consumeWork: consume,
       mode: "validate",
       seen: new WeakSetConstructor(),
-    }).ok;
+    });
+    if (result.ok) return { ok: true };
+    return {
+      ok: false,
+      reason: "budgetExceeded" in result ? "budget" : "unsupported",
+    };
   } catch {
-    return false;
+    return { ok: false, reason: "unsupported" };
   }
 };
+
+export const isRuntimeValue = (
+  value: unknown,
+  limits: RuntimeValueLimits = { maxDepth: 64, maxEntries: 10_000 },
+): value is RuntimeValue => checkRuntimeValue(value, limits).ok;
 
 type NormalizedEnvironment = Readonly<{
   env: Env;
@@ -519,18 +553,27 @@ type NormalizedEnvironment = Readonly<{
 export const normalizeRuntimeValue = (
   value: unknown,
   limits: RuntimeValueLimits = { maxDepth: 64, maxEntries: 10_000 },
-): { ok: true; value: RuntimeValue } | { ok: false; message: string } => {
+  consume: RuntimeWorkConsumer | undefined = undefined,
+):
+  | Readonly<{ ok: true; value: RuntimeValue }>
+  | Readonly<{ ok: false; reason: "unsupported" | "budget" }> => {
   try {
-    return traverseRuntimeValue(value, "value", 0, {
+    const result = traverseRuntimeValue(value, "value", 0, {
       entries: 0,
       maxDepth: 0,
       limits,
+      consumeWork: consume,
       mode: "normalize",
       seen: new WeakMapConstructor(),
       containers: undefined,
     });
+    if (result.ok) return { ok: true, value: result.value };
+    return {
+      ok: false,
+      reason: "budgetExceeded" in result ? "budget" : "unsupported",
+    };
   } catch {
-    return { ok: false, message: "value inspection failed" };
+    return { ok: false, reason: "unsupported" };
   }
 };
 
@@ -563,11 +606,17 @@ const normalizeEnvironment = (
       entries: 0,
       maxDepth: 0,
       limits,
+      consumeWork: undefined,
       mode: "normalize",
       seen: new WeakMapConstructor(),
       containers,
     });
-    if (!normalized.ok) return normalized;
+    if (!normalized.ok) {
+      if ("budgetExceeded" in normalized) {
+        throw new Error("environment normalization has no work budget");
+      }
+      return normalized;
+    }
     return {
       ok: true,
       value: {

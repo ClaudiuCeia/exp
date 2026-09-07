@@ -3,12 +3,13 @@ import { describeThrownValue } from "./error.ts";
 import { parseExpression } from "./parse.ts";
 
 import {
+  checkRuntimeValue,
   isPlainObject,
-  isRuntimeValue,
   normalizeEnv,
   normalizeRuntimeValue,
   prepareEnv,
   type Env,
+  type RuntimeFunction,
   type RuntimeArray,
   type RuntimePrimitive,
   type RuntimeValue,
@@ -24,6 +25,13 @@ const weakSetAdd = WeakSet.prototype.add;
 const weakMapGet = WeakMap.prototype.get;
 const weakMapSet = WeakMap.prototype.set;
 const reflectApply = Reflect.apply;
+const mathMax = Math.max;
+const mathMin = Math.min;
+const mathTrunc = Math.trunc;
+const NumberConstructor = Number;
+const negativeInfinity = Number.NEGATIVE_INFINITY;
+const numberIsFinite = Number.isFinite;
+const numberIsNaN = Number.isNaN;
 const numberIsSafeInteger = Number.isSafeInteger;
 const objectCreate = Object.create;
 const objectDefineProperty = Object.defineProperty;
@@ -31,6 +39,8 @@ const objectEntries = Object.entries;
 const objectFreeze = Object.freeze;
 const objectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 const objectHasOwn = Object.hasOwn;
+const StringConstructor = String;
+const stringCharCodeAt = String.prototype.charCodeAt;
 const standardLibraryEntryCount = objectEntries(std).length;
 
 const createContainerSet = (): WeakSet<object> =>
@@ -108,9 +118,10 @@ export type EvalOptions = Readonly<{
   env?: EnvironmentInput | PreparedEnvironment | undefined;
 
   /**
-   * Max AST traversal work during validation and, separately, max nodes visited
-   * during evaluation. Validation charges the root and every AST edge.
-   * Default: 10_000.
+   * Max work during AST validation and, separately, evaluation. Evaluation
+   * charges AST visits, built-in coercion and string work, standard-library
+   * operations, and runtime-value validation. Host-function execution is not
+   * counted. Default: 10_000.
    */
   maxSteps?: number;
   /** Max AST depth during validation and evaluation. Default: 256 */
@@ -145,7 +156,7 @@ export type EvalOptions = Readonly<{
 export type EvalError = Readonly<{
   message: string;
   span?: Span;
-  /** Validation work or evaluation node visits completed at failure. */
+  /** Validation edges or evaluation work units charged at failure. */
   steps?: number;
   /** Parse error index when evaluation fails due to parse failure. */
   index?: number;
@@ -159,7 +170,7 @@ export type EvalError = Readonly<{
 export class ExpEvalError extends Error {
   /** AST span for eval errors tied to a node. */
   readonly span?: Span;
-  /** Step counter at the time of failure (useful with budgets). */
+  /** Work counter at the time of failure (useful with budgets). */
   readonly steps?: number;
   /** UTF-16 code-unit index when the failure originated from parsing. */
   readonly index?: number;
@@ -210,6 +221,26 @@ const saturatingMultiply = (left: number, right: number): number =>
     ? MAX_SAFE_INTEGER
     : left * right;
 
+class EvaluationBudgetExceeded extends Error {
+  constructor() {
+    super("evaluation budget exceeded");
+    this.name = "EvaluationBudgetExceeded";
+  }
+}
+
+const reserveWork = (ctx: Ctx, units: number): boolean => {
+  if (units > ctx.maxSteps - ctx.steps) {
+    ctx.steps = ctx.maxSteps + 1;
+    return false;
+  }
+  ctx.steps += units;
+  return true;
+};
+
+const consumeWork = (ctx: Ctx, units: number): void => {
+  if (!reserveWork(ctx, units)) throw new EvaluationBudgetExceeded();
+};
+
 const isRuntimeArray = (value: RuntimeValue): value is RuntimeArray => {
   try {
     return arrayIsArray(value);
@@ -229,7 +260,16 @@ const isPrimitive = (v: RuntimeValue): v is RuntimePrimitive => {
 // JS-style loose equality, but with a crucial safety rule:
 // never coerce non-primitives (objects/arrays/functions) via ToPrimitive.
 // This avoids implicit method lookups/calls like `obj.toString()`.
-const looseEqualSafe = (a: RuntimeValue, b: RuntimeValue): boolean => {
+const looseEqualSafe = (
+  a: RuntimeValue,
+  b: RuntimeValue,
+  ctx: Ctx,
+): boolean => {
+  if (typeof a === "string" && typeof b === "string") {
+    consumeWork(ctx, a.length === b.length ? a.length : 1);
+    return a === b;
+  }
+
   // Fast path for identical values and identical references.
   if (a === b) return true;
 
@@ -244,33 +284,36 @@ const looseEqualSafe = (a: RuntimeValue, b: RuntimeValue): boolean => {
   if (a == null || b == null) return false;
 
   // Booleans coerce to numbers.
-  if (typeof a === "boolean") return looseEqualSafe(toNumber(a), b);
-  if (typeof b === "boolean") return looseEqualSafe(a, toNumber(b));
+  if (typeof a === "boolean") return looseEqualSafe(toNumber(a, ctx), b, ctx);
+  if (typeof b === "boolean") return looseEqualSafe(a, toNumber(b, ctx), ctx);
 
   // String/number cross-coercion.
   if (typeof a === "string" && typeof b === "number") {
-    return Number(a) == b;
+    return toNumber(a, ctx) == b;
   }
   if (typeof a === "number" && typeof b === "string") {
-    return a == Number(b);
+    return a == toNumber(b, ctx);
   }
 
   // Remaining primitive pairs: strict equality is enough.
   return a === b;
 };
 
-const toNumber = (v: RuntimeValue): number => {
+const toNumber = (v: RuntimeValue, ctx: Ctx): number => {
   if (typeof v === "number") return v;
   if (typeof v === "boolean") return v ? 1 : 0;
   if (v === null) return 0;
   if (v === undefined) return NaN;
-  if (typeof v === "string") return Number(v);
+  if (typeof v === "string") {
+    consumeWork(ctx, v.length);
+    return NumberConstructor(v);
+  }
   throw new Error("expected primitive");
 };
 
 const toString = (v: RuntimeValue): string => {
   if (typeof v === "string") return v;
-  if (typeof v === "number") return String(v);
+  if (typeof v === "number") return StringConstructor(v);
   if (typeof v === "boolean") return v ? "true" : "false";
   if (v === null) return "null";
   if (v === undefined) return "undefined";
@@ -281,7 +324,10 @@ const evalError = (
   message: string,
   span?: Span,
   steps?: number,
-): EvalResult => ({ success: false, error: { message, span, steps } });
+): Extract<EvalResult, { success: false }> => ({
+  success: false,
+  error: { message, span, steps },
+});
 
 const readEvaluationLimit = (
   value: number | undefined,
@@ -289,7 +335,7 @@ const readEvaluationLimit = (
   name: string,
 ): number | string => {
   const limit = value ?? fallback;
-  return Number.isSafeInteger(limit) && limit >= 0
+  return numberIsSafeInteger(limit) && limit >= 0
     ? limit
     : `${name} must be a non-negative safe integer`;
 };
@@ -368,15 +414,35 @@ export function prepareEnvironment(
   return prepared;
 }
 
-const bump = (ctx: Ctx, span?: Span): EvalResult | null => {
-  ctx.steps++;
-  if (ctx.steps > ctx.maxSteps) {
-    return evalError("evaluation budget exceeded", span, ctx.steps);
+const bump = (
+  ctx: Ctx,
+  span?: Span,
+): Extract<EvalResult, { success: false }> | null => {
+  return reserveWork(ctx, 1)
+    ? null
+    : evalError("evaluation budget exceeded", span, ctx.steps);
+};
+
+const supportsRuntimeValue = (
+  value: unknown,
+  ctx: Ctx,
+): value is RuntimeValue => {
+  const result = checkRuntimeValue(
+    value,
+    {
+      maxDepth: ctx.maxRuntimeDepth,
+      maxEntries: ctx.maxRuntimeEntries,
+    },
+    (units) => reserveWork(ctx, units),
+  );
+  if (!result.ok && result.reason === "budget") {
+    throw new EvaluationBudgetExceeded();
   }
-  return null;
+  return result.ok;
 };
 
 const getMember = (obj: RuntimeValue, prop: string, ctx: Ctx): RuntimeValue => {
+  consumeWork(ctx, prop.length);
   if (FORBIDDEN_MEMBERS.has(prop)) {
     throw new Error("forbidden member access");
   }
@@ -394,12 +460,7 @@ const getMember = (obj: RuntimeValue, prop: string, ctx: Ctx): RuntimeValue => {
   if (isRuntimeArray(obj)) {
     if (prop !== "length") return undefined;
     if (!ownerIsTrusted) {
-      if (
-        !isRuntimeValue(obj, {
-          maxDepth: ctx.maxRuntimeDepth,
-          maxEntries: ctx.maxRuntimeEntries,
-        })
-      ) {
+      if (!supportsRuntimeValue(obj, ctx)) {
         throw new Error(UNSUPPORTED_MEMBER_ERROR);
       }
     }
@@ -440,12 +501,7 @@ const getMember = (obj: RuntimeValue, prop: string, ctx: Ctx): RuntimeValue => {
     } else if (ownerWasCurrent) {
       if (isContainer) containerSetAdd(ctx.currentContainers, value);
     } else {
-      if (
-        !isRuntimeValue(value, {
-          maxDepth: ctx.maxRuntimeDepth,
-          maxEntries: ctx.maxRuntimeEntries,
-        })
-      ) {
+      if (!supportsRuntimeValue(value, ctx)) {
         throw new Error(UNSUPPORTED_MEMBER_ERROR);
       }
     }
@@ -466,6 +522,7 @@ type ConditionalExpr = Extract<Expr, { kind: "conditional" }>;
 type UndefinedExpr = Extract<Expr, { kind: "undefined" }>;
 
 const evalIdentifierExpr = (expr: IdentifierExpr, ctx: Ctx): EvalResult => {
+  consumeWork(ctx, expr.name.length);
   if (objectHasOwn(ctx.env, expr.name)) {
     return { success: true, value: ctx.env[expr.name] };
   }
@@ -503,9 +560,9 @@ const evalUnaryExpr = (expr: UnaryExpr, ctx: Ctx): EvalResult => {
     case "!":
       return { success: true, value: !isTruthy(v) };
     case "+":
-      return { success: true, value: toNumber(v) };
+      return { success: true, value: toNumber(v, ctx) };
     case "-":
-      return { success: true, value: -toNumber(v) };
+      return { success: true, value: -toNumber(v, ctx) };
   }
 
   return evalError("unknown unary operator", expr.span, ctx.steps);
@@ -543,33 +600,36 @@ const evalBinaryExpr = (expr: BinaryExpr, ctx: Ctx): EvalResult => {
 
   switch (expr.op) {
     case "+":
+      if (typeof a === "string" || typeof b === "string") {
+        const left = toString(a);
+        const right = toString(b);
+        consumeWork(ctx, left.length + right.length);
+        return { success: true, value: left + right };
+      }
       return {
         success: true,
-        value:
-          typeof a === "string" || typeof b === "string"
-            ? toString(a) + toString(b)
-            : toNumber(a) + toNumber(b),
+        value: toNumber(a, ctx) + toNumber(b, ctx),
       };
     case "-":
-      return { success: true, value: toNumber(a) - toNumber(b) };
+      return { success: true, value: toNumber(a, ctx) - toNumber(b, ctx) };
     case "*":
-      return { success: true, value: toNumber(a) * toNumber(b) };
+      return { success: true, value: toNumber(a, ctx) * toNumber(b, ctx) };
     case "/":
-      return { success: true, value: toNumber(a) / toNumber(b) };
+      return { success: true, value: toNumber(a, ctx) / toNumber(b, ctx) };
     case "%":
-      return { success: true, value: toNumber(a) % toNumber(b) };
+      return { success: true, value: toNumber(a, ctx) % toNumber(b, ctx) };
     case "<":
-      return { success: true, value: toNumber(a) < toNumber(b) };
+      return { success: true, value: toNumber(a, ctx) < toNumber(b, ctx) };
     case "<=":
-      return { success: true, value: toNumber(a) <= toNumber(b) };
+      return { success: true, value: toNumber(a, ctx) <= toNumber(b, ctx) };
     case ">":
-      return { success: true, value: toNumber(a) > toNumber(b) };
+      return { success: true, value: toNumber(a, ctx) > toNumber(b, ctx) };
     case ">=":
-      return { success: true, value: toNumber(a) >= toNumber(b) };
+      return { success: true, value: toNumber(a, ctx) >= toNumber(b, ctx) };
     case "==":
-      return { success: true, value: looseEqualSafe(a, b) };
+      return { success: true, value: looseEqualSafe(a, b, ctx) };
     case "!=":
-      return { success: true, value: !looseEqualSafe(a, b) };
+      return { success: true, value: !looseEqualSafe(a, b, ctx) };
   }
 
   return evalError("unknown binary operator", expr.span, ctx.steps);
@@ -582,6 +642,178 @@ const evalMemberExpr = (expr: MemberExpr, ctx: Ctx): EvalResult => {
   return { success: true, value };
 };
 
+type MemberCallTarget =
+  | Readonly<{
+      success: true;
+      receiver: RuntimeValue;
+      value: RuntimeValue;
+    }>
+  | Readonly<{ success: false; error: EvalError }>;
+
+const evalMemberCallTarget = (expr: MemberExpr, ctx: Ctx): MemberCallTarget => {
+  let span: Span | undefined;
+  try {
+    span = expr.span;
+    const budget = bump(ctx, span);
+    if (budget !== null) return budget;
+    if (ctx.depth > ctx.maxDepth) {
+      return evalError("evaluation recursion limit exceeded", span, ctx.steps);
+    }
+
+    ctx.depth++;
+    try {
+      const receiver = evalExpr(expr.object, ctx);
+      if (!receiver.success) return receiver;
+      return {
+        success: true,
+        receiver: receiver.value,
+        value: getMember(receiver.value, expr.property, ctx),
+      };
+    } finally {
+      ctx.depth--;
+    }
+  } catch (error) {
+    return evalError(describeThrownValue(error), span, ctx.steps);
+  }
+};
+
+type StandardCallResult =
+  | Readonly<{ handled: false }>
+  | Readonly<{ handled: true; value: RuntimeValue }>;
+
+const stringCodeUnit = (value: string, index: number): number =>
+  reflectApply(stringCharCodeAt, value, [index]);
+
+const includesString = (
+  haystack: string,
+  needle: string,
+  ctx: Ctx,
+): boolean => {
+  if (needle.length === 0) return true;
+  const lastStart = haystack.length - needle.length;
+  for (let start = 0; start <= lastStart; start++) {
+    let matched = true;
+    for (let offset = 0; offset < needle.length; offset++) {
+      consumeWork(ctx, 1);
+      if (
+        stringCodeUnit(haystack, start + offset) !==
+        stringCodeUnit(needle, offset)
+      ) {
+        matched = false;
+        break;
+      }
+    }
+    if (matched) return true;
+  }
+  return false;
+};
+
+const includesArray = (
+  haystack: RuntimeArray,
+  needle: RuntimeValue,
+  ctx: Ctx,
+): boolean => {
+  const length = runtimeArrayLength(haystack, "std.includes");
+  for (let index = 0; index < length; index++) {
+    consumeWork(ctx, 1);
+    const descriptor = objectGetOwnPropertyDescriptor(
+      haystack,
+      StringConstructor(index),
+    );
+    if (descriptor === undefined) continue;
+    if (!("value" in descriptor)) {
+      throw new Error("std.includes array entries must be data properties");
+    }
+    if (descriptor.value === needle) return true;
+  }
+  return false;
+};
+
+const runtimeArrayLength = (value: RuntimeArray, name: string): number => {
+  const lengthDescriptor = objectGetOwnPropertyDescriptor(value, "length");
+  if (
+    lengthDescriptor === undefined ||
+    !("value" in lengthDescriptor) ||
+    typeof lengthDescriptor.value !== "number" ||
+    !numberIsSafeInteger(lengthDescriptor.value) ||
+    lengthDescriptor.value < 0
+  ) {
+    throw new Error(`${name} expects an Array length data property`);
+  }
+  return lengthDescriptor.value;
+};
+
+const toSliceIndex = (value: number, length: number): number => {
+  const integer = numberIsNaN(value)
+    ? 0
+    : numberIsFinite(value)
+      ? mathTrunc(value)
+      : value;
+  if (integer === negativeInfinity) return 0;
+  if (integer < 0) return mathMax(length + integer, 0);
+  return mathMin(integer, length);
+};
+
+const sliceLength = (
+  value: string,
+  start: number,
+  end: number | undefined,
+): number => {
+  const from = toSliceIndex(start, value.length);
+  const to = end === undefined ? value.length : toSliceIndex(end, value.length);
+  return mathMax(to - from, 0);
+};
+
+const callStandardFunction = (
+  fn: RuntimeFunction,
+  args: readonly RuntimeValue[],
+  ctx: Ctx,
+): StandardCallResult => {
+  const invoke = (): RuntimeValue => reflectApply(fn, undefined, args);
+  const first = args[0];
+  const second = args[1];
+
+  if (fn === std.len) {
+    if (typeof first === "string")
+      return { handled: true, value: first.length };
+    if (isRuntimeArray(first)) {
+      return { handled: true, value: runtimeArrayLength(first, "std.len") };
+    }
+    return { handled: true, value: invoke() };
+  }
+  if (fn === std.lower || fn === std.upper || fn === std.trim) {
+    if (typeof first === "string") consumeWork(ctx, first.length);
+    return { handled: true, value: invoke() };
+  }
+  if (fn === std.startsWith || fn === std.endsWith) {
+    if (typeof first === "string" && typeof second === "string") {
+      consumeWork(ctx, second.length);
+    }
+    return { handled: true, value: invoke() };
+  }
+  if (fn === std.includes) {
+    if (typeof first === "string" && typeof second === "string") {
+      return { handled: true, value: includesString(first, second, ctx) };
+    }
+    if (isRuntimeArray(first)) {
+      return { handled: true, value: includesArray(first, second, ctx) };
+    }
+    return { handled: true, value: invoke() };
+  }
+  if (fn === std.slice) {
+    const end = args[2];
+    if (
+      typeof first === "string" &&
+      typeof second === "number" &&
+      (end === undefined || typeof end === "number")
+    ) {
+      consumeWork(ctx, sliceLength(first, second, end));
+    }
+    return { handled: true, value: invoke() };
+  }
+  return { handled: false };
+};
+
 const evalCallExpr = (expr: CallExpr, ctx: Ctx): EvalResult => {
   if (expr.args.length > ctx.maxCallArguments) {
     return evalError("call argument list too large", expr.span, ctx.steps);
@@ -591,10 +823,10 @@ const evalCallExpr = (expr: CallExpr, ctx: Ctx): EvalResult => {
   let receiver: RuntimeValue | undefined;
 
   if (expr.callee.kind === "member") {
-    const obj = evalExpr(expr.callee.object, ctx);
-    if (!obj.success) return obj;
-    receiver = obj.value;
-    fn = getMember(obj.value, expr.callee.property, ctx);
+    const target = evalMemberCallTarget(expr.callee, ctx);
+    if (!target.success) return target;
+    receiver = target.receiver;
+    fn = target.value;
   } else {
     const callee = evalExpr(expr.callee, ctx);
     if (!callee.success) return callee;
@@ -613,13 +845,11 @@ const evalCallExpr = (expr: CallExpr, ctx: Ctx): EvalResult => {
   }
 
   ctx.currentContainers = createContainerSet();
-  const out: unknown = reflectApply(fn, receiver, args);
-  if (
-    !isRuntimeValue(out, {
-      maxDepth: ctx.maxRuntimeDepth,
-      maxEntries: ctx.maxRuntimeEntries,
-    })
-  ) {
+  const standardCall = callStandardFunction(fn, args, ctx);
+  const out: unknown = standardCall.handled
+    ? standardCall.value
+    : reflectApply(fn, receiver, args);
+  if (!supportsRuntimeValue(out, ctx)) {
     return evalError(
       "function returned an unsupported value",
       expr.span,
@@ -712,8 +942,8 @@ const validateSpan = (value: unknown): AstValidationResult => {
   const end = readAstProperty(value, "end");
   if (!end.ok) return astValidationError(end.message);
   if (
-    !Number.isSafeInteger(start.value) ||
-    !Number.isSafeInteger(end.value) ||
+    !numberIsSafeInteger(start.value) ||
+    !numberIsSafeInteger(end.value) ||
     (start.value as number) < 0 ||
     (end.value as number) < (start.value as number)
   ) {
@@ -751,7 +981,7 @@ const readAstChildren = (
   const length = lengthDescriptor.value;
   if (
     typeof length !== "number" ||
-    !Number.isSafeInteger(length) ||
+    !numberIsSafeInteger(length) ||
     length < 0
   ) {
     return {
@@ -837,7 +1067,7 @@ const validateAst = (
           if (budget !== null) return budget;
           const child = objectGetOwnPropertyDescriptor(
             frame.value,
-            String(frame.index),
+            StringConstructor(frame.index),
           );
           if (child === undefined || !("value" in child)) {
             return astValidationError(
@@ -1006,7 +1236,7 @@ const validateAst = (
  * Validation does not copy AST child arrays. It applies `maxArrayElements` and
  * `maxCallArguments` before reading entries, then charges `maxSteps` for the
  * root and every traversed edge. Evaluation starts a separate `maxSteps`
- * counter.
+ * counter for AST visits and variable-size interpreter work.
  */
 export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
   const throwOnError = opts.throwOnError ?? true;
@@ -1176,14 +1406,29 @@ export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
       saturatingAdd(maxRuntimeEntries, standardLibraryEntryCount),
       saturatingMultiply(maxSteps, saturatingAdd(maxRuntimeEntries, 1)),
     );
-    const normalized = normalizeRuntimeValue(res.value, {
-      maxDepth: saturatingAdd(maxDepth, maxRuntimeDepth),
-      maxEntries: resultMaxEntries,
-    });
+    let normalizationSteps = 0;
+    const normalized = normalizeRuntimeValue(
+      res.value,
+      {
+        maxDepth: saturatingAdd(maxDepth, maxRuntimeDepth),
+        maxEntries: resultMaxEntries,
+      },
+      (units) => {
+        if (units > maxSteps - normalizationSteps) {
+          normalizationSteps = maxSteps + 1;
+          return false;
+        }
+        normalizationSteps += units;
+        return true;
+      },
+    );
     if (normalized.ok) return { success: true, value: normalized.value };
     const error: EvalError = {
-      message: "evaluation result is not a supported runtime value",
-      steps: resultSteps,
+      message:
+        normalized.reason === "budget"
+          ? "evaluation budget exceeded"
+          : "evaluation result is not a supported runtime value",
+      steps: normalized.reason === "budget" ? normalizationSteps : resultSteps,
     };
     if (throwOnError) throw new ExpEvalError(error);
     return { success: false, error };

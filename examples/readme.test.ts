@@ -62,7 +62,7 @@ assert(
     evaluatorResult.error.span.end === 7,
   "evaluator failure span should be checked",
 );
-assert(evaluatorResult.error.steps === 2, "evaluator steps should be checked");
+assert(evaluatorResult.error.steps === 9, "evaluator steps should be checked");
 assert(
   evaluatorDiagnostic ===
     "1 | missing + 1\n" +
