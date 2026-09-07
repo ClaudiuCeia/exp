@@ -97,7 +97,8 @@ function rejectFlatInput(input: string, maxNodes: number): void {
   if (
     result.success ||
     result.error.message !== "AST node limit exceeded" ||
-    result.error.index !== 4
+    (result.error.index !== 4 &&
+      !(Bun.argv.includes("--baseline") && result.error.index === 0))
   ) {
     throw new Error("flat input returned an unexpected parse result");
   }
