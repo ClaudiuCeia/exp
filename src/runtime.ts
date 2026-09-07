@@ -27,12 +27,23 @@ export type RuntimeValue =
 
 export type Env = Record<string, RuntimeValue>;
 
+const ArrayConstructor = Array;
+const arrayFrom = Array.from;
+const arrayIsArray = Array.isArray;
+const objectCreate = Object.create;
+const objectDefineProperty = Object.defineProperty;
+const objectEntries = Object.entries;
+const objectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+const objectGetPrototypeOf = Object.getPrototypeOf;
+const objectPrototype = Object.prototype;
+const reflectOwnKeys = Reflect.ownKeys;
+
 export const isPlainObject = (
   value: unknown,
 ): value is Record<string, unknown> => {
   if (value === null || typeof value !== "object") return false;
-  const proto = Object.getPrototypeOf(value);
-  return proto === Object.prototype || proto === null;
+  const proto = objectGetPrototypeOf(value);
+  return proto === objectPrototype || proto === null;
 };
 
 export type RuntimeValueLimits = Readonly<{
@@ -202,7 +213,7 @@ const traverseRuntimeValue = (
     } else if (target.kind === "array") {
       target.value[target.index] = normalizedValue;
     } else {
-      Object.defineProperty(target.value, target.key, {
+      objectDefineProperty(target.value, target.key, {
         value: normalizedValue,
         enumerable: true,
         writable: true,
@@ -237,8 +248,8 @@ const traverseRuntimeValue = (
       }
 
       if (!alreadySeen) {
-        if (Array.isArray(currentValue)) {
-          const lengthDescriptor = Object.getOwnPropertyDescriptor(
+        if (arrayIsArray(currentValue)) {
+          const lengthDescriptor = objectGetOwnPropertyDescriptor(
             currentValue,
             "length",
           );
@@ -255,7 +266,11 @@ const traverseRuntimeValue = (
           if (!counted.ok) return counted;
 
           if (state.mode === "normalize") {
-            const output: RuntimeArray = Array.from({ length });
+            const output: RuntimeArray = reflectApply(
+              arrayFrom,
+              ArrayConstructor,
+              [{ length }],
+            );
             seenMapSet(state.seen, currentValue, output);
             topFrame = {
               kind: "array",
@@ -291,17 +306,18 @@ const traverseRuntimeValue = (
 
           let output: RuntimeObject | undefined;
           if (state.mode === "normalize") {
-            output = Object.create(null) as RuntimeObject;
+            output = objectCreate(null) as RuntimeObject;
             seenMapSet(state.seen, currentValue, output);
           }
+
           const descriptors = Object.getOwnPropertyDescriptors(currentValue);
           const counted = consumeEntries(
             state,
-            Reflect.ownKeys(descriptors).length,
+            reflectOwnKeys(descriptors).length,
             currentPath,
           );
           if (!counted.ok) return counted;
-          const entries = Object.entries(descriptors);
+          const entries = objectEntries(descriptors);
 
           if (state.mode === "normalize") {
             if (output === undefined) {
@@ -346,7 +362,7 @@ const traverseRuntimeValue = (
         }
 
         const index = frame.index;
-        const descriptor = Object.getOwnPropertyDescriptor(
+        const descriptor = objectGetOwnPropertyDescriptor(
           frame.value,
           String(index),
         );
@@ -413,7 +429,7 @@ const traverseRuntimeValue = (
       const childValue = descriptor.value;
       if (isRuntimeLeaf(childValue)) {
         if (frame.mode === "normalize") {
-          Object.defineProperty(frame.output, key, {
+          objectDefineProperty(frame.output, key, {
             value: childValue,
             enumerable: true,
             writable: true,

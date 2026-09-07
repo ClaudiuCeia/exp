@@ -729,7 +729,7 @@ test("evaluateExpression contains hostile environment inspection exceptions", ()
   assertEquals(res.error.steps, 0);
 });
 
-test("evaluateExpression contains post-normalization intrinsic failures", () => {
+test("evaluateExpression uses captured setup intrinsics after normalization", () => {
   const descriptor = Object.getOwnPropertyDescriptor(Object, "hasOwn");
   if (descriptor === undefined) throw new Error("missing Object.hasOwn");
   const env = new Proxy<Record<string, RuntimeValue>>(
@@ -753,12 +753,187 @@ test("evaluateExpression contains post-normalization intrinsic failures", () => 
       throwOnError: false,
     });
 
-    assertEquals(res.success, false);
-    if (res.success) return;
-    assertEquals(res.error.message, "evaluation setup failed");
-    assertEquals(res.error.steps, 0);
+    assertEquals(res, { success: true, value: 1 });
   } finally {
     Reflect.defineProperty(Object, "hasOwn", descriptor);
+  }
+});
+
+test("evaluateExpression cannot mutate containers during cache seeding", () => {
+  const descriptor = Object.getOwnPropertyDescriptor(Object, "defineProperty");
+  if (descriptor === undefined)
+    throw new Error("missing Object.defineProperty");
+  const defineProperty = Object.defineProperty;
+  const box = { secret: 1 };
+  let matchingAssignments = 0;
+  let mutations = 0;
+  const env = new Proxy<Record<string, RuntimeValue>>(
+    { box },
+    {
+      getPrototypeOf(target) {
+        defineProperty(Object, "defineProperty", {
+          ...descriptor,
+          value: (
+            object: object,
+            property: PropertyKey,
+            attributes: PropertyDescriptor & ThisType<unknown>,
+          ): object => {
+            const result = defineProperty(object, property, attributes);
+            const value: unknown = attributes.value;
+            if (
+              value !== null &&
+              typeof value === "object" &&
+              Object.hasOwn(value, "secret")
+            ) {
+              matchingAssignments++;
+              if (matchingAssignments === 2) {
+                mutations++;
+                defineProperty(value, "secret", {
+                  value: new Date(),
+                  enumerable: true,
+                });
+              }
+            }
+            return result;
+          },
+        });
+        return Reflect.getPrototypeOf(target);
+      },
+    },
+  );
+
+  try {
+    const result = evaluateExpression("box.secret", {
+      env,
+      throwOnError: false,
+    });
+    assertEquals(result, { success: true, value: 1 });
+    assertEquals(matchingAssignments, 0);
+    assertEquals(mutations, 0);
+  } finally {
+    defineProperty(Object, "defineProperty", descriptor);
+  }
+});
+
+test("evaluateExpression does not iterate normalized setup entries", () => {
+  const descriptor = Object.getOwnPropertyDescriptor(
+    Array.prototype,
+    Symbol.iterator,
+  );
+  if (descriptor === undefined) throw new Error("missing array iterator");
+  const arrayIterator = Array.prototype[Symbol.iterator];
+  let iteratorCalls = 0;
+  let mutations = 0;
+  const env = new Proxy<Record<string, RuntimeValue>>(
+    { box: { secret: 1 } },
+    {
+      getPrototypeOf(target) {
+        Object.defineProperty(Array.prototype, Symbol.iterator, {
+          ...descriptor,
+          value: function (this: unknown[]): IterableIterator<unknown> {
+            iteratorCalls++;
+            const iterator = Reflect.apply(
+              arrayIterator,
+              this,
+              [],
+            ) as IterableIterator<unknown>;
+            return {
+              [Symbol.iterator]() {
+                return this;
+              },
+              next() {
+                const next = iterator.next();
+                if (!next.done && Array.isArray(next.value)) {
+                  const value: unknown = next.value[1];
+                  if (
+                    value !== null &&
+                    typeof value === "object" &&
+                    Object.hasOwn(value, "secret")
+                  ) {
+                    mutations++;
+                    Object.defineProperty(value, "secret", {
+                      value: new Date(),
+                      enumerable: true,
+                    });
+                  }
+                }
+                return next;
+              },
+            };
+          },
+        });
+        return Reflect.getPrototypeOf(target);
+      },
+    },
+  );
+  let result: ReturnType<typeof evaluateExpression> | undefined;
+
+  try {
+    result = evaluateExpression("box.secret", {
+      env,
+      throwOnError: false,
+    });
+  } finally {
+    Object.defineProperty(Array.prototype, Symbol.iterator, descriptor);
+  }
+  if (result === undefined) throw new Error("evaluation did not return");
+  assertEquals(result, { success: true, value: 1 });
+  assertEquals(iteratorCalls, 2);
+  assertEquals(mutations, 0);
+});
+
+test("evaluateAst uses captured descriptors for cached member reads", () => {
+  const descriptor = Object.getOwnPropertyDescriptor(
+    Object,
+    "getOwnPropertyDescriptor",
+  );
+  if (descriptor === undefined) {
+    throw new Error("missing Object.getOwnPropertyDescriptor");
+  }
+  const getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+  let forgedReads = 0;
+  const member = new Proxy(
+    {
+      kind: "member" as const,
+      object: {
+        kind: "identifier" as const,
+        name: "box",
+        span: { start: 0, end: 3 },
+      },
+      property: "secret",
+      span: { start: 0, end: 10 },
+    },
+    {
+      get(target, property, receiver) {
+        Object.defineProperty(Object, "getOwnPropertyDescriptor", {
+          ...descriptor,
+          value: (value: object, key: PropertyKey) => {
+            if (key === "secret") {
+              forgedReads++;
+              return {
+                configurable: true,
+                enumerable: true,
+                value: new Date(),
+                writable: true,
+              };
+            }
+            return getOwnPropertyDescriptor(value, key);
+          },
+        });
+        return Reflect.get(target, property, receiver);
+      },
+    },
+  );
+
+  try {
+    const result = evaluateAst(member, {
+      env: { box: { secret: 1 } },
+      throwOnError: false,
+    });
+    assertEquals(result, { success: true, value: 1 });
+    assertEquals(forgedReads, 0);
+  } finally {
+    Object.defineProperty(Object, "getOwnPropertyDescriptor", descriptor);
   }
 });
 
@@ -1516,7 +1691,7 @@ test("evaluateAst contains hostile property reads after validation", () => {
   assertEquals(res.error.span, undefined);
 });
 
-test("evaluateAst contains post-validation intrinsic failures", () => {
+test("evaluateAst uses captured setup intrinsics after validation", () => {
   const descriptor = Object.getOwnPropertyDescriptor(Object, "hasOwn");
   if (descriptor === undefined) throw new Error("missing Object.hasOwn");
   const target: Expr = {
@@ -1541,10 +1716,7 @@ test("evaluateAst contains post-validation intrinsic failures", () => {
   try {
     const res = evaluateAst(expr, { throwOnError: false });
 
-    assertEquals(res.success, false);
-    if (res.success) return;
-    assertEquals(res.error.message, "evaluation setup failed");
-    assertEquals(res.error.steps, 0);
+    assertEquals(res, { success: true, value: 1 });
   } finally {
     Reflect.defineProperty(Object, "hasOwn", descriptor);
   }
