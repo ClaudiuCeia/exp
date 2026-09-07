@@ -20,13 +20,13 @@ import {
   withSpan,
 } from "@claudiu-ceia/combine";
 import {
-  type BinaryOp,
+  BINARY_OPERATOR_GROUPS,
   type Expr,
   mkBinary,
   mkCall,
   mkMember,
   mkUnary,
-  type UnaryOp,
+  UNARY_OPERATORS,
 } from "./ast/mod.ts";
 import { createStringSpan } from "./string_literal.ts";
 
@@ -145,16 +145,23 @@ const rbrack = lx.lexeme(map(withSpan(str("]")), ({ end }) => end));
 
 const comma = lx.symbol(",");
 
+type OperatorList = readonly [string, ...string[]];
+
+const operatorParser = <const Operators extends OperatorList>(
+  operators: Operators,
+): Parser<Operators[number]> => {
+  const parsers: Parser<Operators[number]>[] = [];
+  for (const operator of operators) {
+    parsers.push(map(lx.symbol(operator), () => operator));
+  }
+  return any(...parsers);
+};
+
 type ExprLang = Readonly<{
   Expression: Expr;
   Conditional: Expr;
   Pipeline: Expr;
-  LogicalOr: Expr;
-  LogicalAnd: Expr;
-  Equality: Expr;
-  Comparison: Expr;
-  Additive: Expr;
-  Multiplicative: Expr;
+  Binary: Expr;
   Unary: Expr;
   Postfix: Expr;
   Primary: Expr;
@@ -248,10 +255,7 @@ const createExpressionLanguage = (budget: AstNodeBudget) =>
       };
 
       return map(
-        seq(
-          s.LogicalOr,
-          many(seq(op, cut(s.Postfix, "expression after '|>'"))),
-        ),
+        seq(s.Binary, many(seq(op, cut(s.Postfix, "expression after '|>'")))),
         ([first, rest]) => {
           return rest.reduce(
             (acc, [, rhs]) => mkPipedCall(acc.span.start, rhs, acc),
@@ -261,68 +265,27 @@ const createExpressionLanguage = (budget: AstNodeBudget) =>
       );
     },
 
-    LogicalOr: (s) => {
-      const op = any(lx.symbol("||"), lx.symbol("??"));
-      return chainl1(s.LogicalAnd, op, (l, o, r) => {
-        budget.consume(l.span.start);
-        return mkBinary(l, o as BinaryOp, r);
-      });
-    },
-
-    LogicalAnd: (s) => {
-      const op = lx.symbol("&&");
-      return chainl1(s.Equality, op, (l, _op, r) => {
-        budget.consume(l.span.start);
-        return mkBinary(l, "&&", r);
-      });
-    },
-
-    Equality: (s) => {
-      const op = any(lx.symbol("=="), lx.symbol("!="));
-      return chainl1(s.Comparison, op, (l, o, r) => {
-        budget.consume(l.span.start);
-        return mkBinary(l, o as BinaryOp, r);
-      });
-    },
-
-    Comparison: (s) => {
-      const op = any(
-        lx.symbol("<="),
-        lx.symbol(">="),
-        lx.symbol("<"),
-        lx.symbol(">"),
-      );
-      return chainl1(s.Additive, op, (l, o, r) => {
-        budget.consume(l.span.start);
-        return mkBinary(l, o as BinaryOp, r);
-      });
-    },
-
-    Additive: (s) => {
-      const op = any(lx.symbol("+"), lx.symbol("-"));
-      return chainl1(s.Multiplicative, op, (l, o, r) => {
-        budget.consume(l.span.start);
-        return mkBinary(l, o as BinaryOp, r);
-      });
-    },
-
-    Multiplicative: (s) => {
-      const op = any(lx.symbol("*"), lx.symbol("/"), lx.symbol("%"));
-      return chainl1(s.Unary, op, (l, o, r) => {
-        budget.consume(l.span.start);
-        return mkBinary(l, o as BinaryOp, r);
-      });
+    Binary: (s) => {
+      let parser: Parser<Expr> = s.Unary;
+      for (let index = BINARY_OPERATOR_GROUPS.length - 1; index >= 0; index--) {
+        const operators = BINARY_OPERATOR_GROUPS[index];
+        if (operators === undefined) {
+          throw new Error("binary operator group is missing");
+        }
+        parser = chainl1(parser, operatorParser(operators), (l, o, r) => {
+          budget.consume(l.span.start);
+          return mkBinary(l, o, r);
+        });
+      }
+      return parser;
     },
 
     Unary: (s) => {
       const op = lx.lexeme(
-        map(
-          withSpan(any(str("!"), str("-"), str("+"))),
-          ({ value, start }) => ({
-            op: value as UnaryOp,
-            start,
-          }),
-        ),
+        map(withSpan(operatorParser(UNARY_OPERATORS)), ({ value, start }) => ({
+          op: value,
+          start,
+        })),
       );
 
       return map(seq(many(op), s.Postfix), ([ops, expr]) => {

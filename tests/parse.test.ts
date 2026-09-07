@@ -5,6 +5,7 @@ import {
   assertStringIncludes,
   assertThrows,
 } from "./assert.ts";
+import { BINARY_OPERATOR_GROUPS, type BinaryOp } from "../src/ast/mod.ts";
 import { ExpParseError, parseExpression } from "../src/parse.ts";
 
 test("parseExpression parses numbers", () => {
@@ -221,6 +222,93 @@ test("parseExpression respects operator precedence", () => {
   assertEquals(res.value.right.kind, "binary");
   if (res.value.right.kind !== "binary") return;
   assertEquals(res.value.right.op, "*");
+});
+
+test("parseExpression preserves every precedence boundary", () => {
+  const cases: Readonly<{
+    source: string;
+    root: BinaryOp;
+    nested: BinaryOp;
+  }>[] = [];
+  for (let index = 0; index < BINARY_OPERATOR_GROUPS.length - 1; index++) {
+    const lower = BINARY_OPERATOR_GROUPS[index];
+    const higher = BINARY_OPERATOR_GROUPS[index + 1];
+    if (lower === undefined || higher === undefined) continue;
+    cases.push({
+      source: `1 ${lower[0]} 2 ${higher[0]} 3`,
+      root: lower[0],
+      nested: higher[0],
+    });
+  }
+
+  for (const testCase of cases) {
+    const result = parseExpression(testCase.source, { throwOnError: false });
+    assertEquals(result.success, true);
+    if (!result.success || result.value.kind !== "binary") continue;
+    assertEquals(result.value.op, testCase.root);
+    assertEquals(result.value.right.kind, "binary");
+    if (result.value.right.kind !== "binary") continue;
+    assertEquals(result.value.right.op, testCase.nested);
+  }
+});
+
+test("parseExpression preserves left associativity within precedence groups", () => {
+  const cases: Readonly<{
+    source: string;
+    root: BinaryOp;
+    nested: BinaryOp;
+  }>[] = BINARY_OPERATOR_GROUPS.map((operators) => ({
+    source: `1 ${operators[0]} 2 ${operators.at(-1)} 3`,
+    root: operators.at(-1) ?? operators[0],
+    nested: operators[0],
+  }));
+
+  for (const testCase of cases) {
+    const result = parseExpression(testCase.source, { throwOnError: false });
+    assertEquals(result.success, true);
+    if (!result.success || result.value.kind !== "binary") continue;
+    assertEquals(result.value.op, testCase.root);
+    assertEquals(result.value.left.kind, "binary");
+    if (result.value.left.kind !== "binary") continue;
+    assertEquals(result.value.left.op, testCase.nested);
+  }
+});
+
+test("parseExpression preserves multi-character and unary operator boundaries", () => {
+  const comparisons = parseExpression("1 <= 2 >= 1", {
+    throwOnError: false,
+  });
+  assertEquals(comparisons.success, true);
+  if (!comparisons.success || comparisons.value.kind !== "binary") return;
+  assertEquals(comparisons.value.op, ">=");
+  assertEquals(comparisons.value.left.kind, "binary");
+  if (comparisons.value.left.kind !== "binary") return;
+  assertEquals(comparisons.value.left.op, "<=");
+
+  const unary = parseExpression("!-+1", { throwOnError: false });
+  assertEquals(unary.success, true);
+  if (!unary.success || unary.value.kind !== "unary") return;
+  assertEquals(unary.value.op, "!");
+  assertEquals(unary.value.expr.kind, "unary");
+  if (unary.value.expr.kind !== "unary") return;
+  assertEquals(unary.value.expr.op, "-");
+  assertEquals(unary.value.expr.expr.kind, "unary");
+  if (unary.value.expr.expr.kind !== "unary") return;
+  assertEquals(unary.value.expr.expr.op, "+");
+});
+
+test("parseExpression rejects undeclared operators", () => {
+  for (const source of [
+    "1 === 1",
+    "1 !== 2",
+    "2 ** 3",
+    "1 & 1",
+    "1 | 1",
+    "~1",
+  ]) {
+    const result = parseExpression(source, { throwOnError: false });
+    assertEquals(result.success, false);
+  }
 });
 
 test("parseExpression parses member access and calls", () => {

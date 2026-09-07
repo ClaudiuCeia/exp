@@ -1,5 +1,6 @@
 import { test } from "bun:test";
 import { assert } from "./assert.ts";
+import { BINARY_OPERATORS, UNARY_OPERATORS } from "../src/ast/mod.ts";
 import { evaluateExpression } from "../src/eval.ts";
 import { parseExpression } from "../src/parse.ts";
 
@@ -124,25 +125,6 @@ const genPrimary = (rng: () => number, depth: number): string => {
   return genPostfix(rng, base, depth);
 };
 
-const BINARY_OPS = [
-  "+",
-  "-",
-  "*",
-  "/",
-  "%",
-  "==",
-  "!=",
-  "<",
-  "<=",
-  ">",
-  ">=",
-  "&&",
-  "||",
-  "??",
-] as const;
-
-const UNARY_OPS = ["!", "+", "-"] as const;
-
 const genExpr = (rng: () => number, depth = 0): string => {
   if (depth > 3) return genPrimary(rng, depth);
 
@@ -166,14 +148,16 @@ const genExpr = (rng: () => number, depth = 0): string => {
   // Otherwise: a binary chain.
   const parts: string[] = [];
   if (chance(rng, 0.15)) {
-    parts.push(choose(rng, UNARY_OPS) + maybeWs(rng) + genPrimary(rng, depth));
+    parts.push(
+      choose(rng, UNARY_OPERATORS) + maybeWs(rng) + genPrimary(rng, depth),
+    );
   } else {
     parts.push(genPrimary(rng, depth));
   }
 
   const opsCount = 1 + randInt(rng, 6);
   for (let i = 0; i < opsCount; i++) {
-    const op = choose(rng, BINARY_OPS);
+    const op = choose(rng, BINARY_OPERATORS);
     const rhs = genPrimary(rng, depth);
     parts.push(`${maybeWs(rng)}${op}${maybeWs(rng)}${rhs}`);
   }

@@ -1,4 +1,4 @@
-import type { Expr, Span } from "./ast/mod.ts";
+import { type Expr, isBinaryOp, isUnaryOp, type Span } from "./ast/mod.ts";
 import { describeThrownValue } from "./error.ts";
 import { parseExpression } from "./parse.ts";
 
@@ -42,6 +42,10 @@ const objectHasOwn = Object.hasOwn;
 const StringConstructor = String;
 const stringCharCodeAt = String.prototype.charCodeAt;
 const standardLibraryEntryCount = objectEntries(std).length;
+
+const assertNever = (_value: never): never => {
+  throw new Error("unexpected operator");
+};
 
 const createContainerSet = (): WeakSet<object> =>
   new WeakSetConstructor<object>();
@@ -552,11 +556,15 @@ const evalUndefinedExpr = (_expr: UndefinedExpr, _ctx: Ctx): EvalResult => {
 };
 
 const evalUnaryExpr = (expr: UnaryExpr, ctx: Ctx): EvalResult => {
+  const op: unknown = expr.op;
+  if (!isUnaryOp(op)) {
+    return evalError("unknown unary operator", expr.span, ctx.steps);
+  }
   const r = evalExpr(expr.expr, ctx);
   if (!r.success) return r;
   const v = r.value;
 
-  switch (expr.op) {
+  switch (op) {
     case "!":
       return { success: true, value: !isTruthy(v) };
     case "+":
@@ -565,25 +573,29 @@ const evalUnaryExpr = (expr: UnaryExpr, ctx: Ctx): EvalResult => {
       return { success: true, value: -toNumber(v, ctx) };
   }
 
-  return evalError("unknown unary operator", expr.span, ctx.steps);
+  return assertNever(op);
 };
 
 const evalBinaryExpr = (expr: BinaryExpr, ctx: Ctx): EvalResult => {
+  const op: unknown = expr.op;
+  if (!isBinaryOp(op)) {
+    return evalError("unknown binary operator", expr.span, ctx.steps);
+  }
   // Short-circuiting operators must be lazy.
-  if (expr.op === "&&") {
+  if (op === "&&") {
     const l = evalExpr(expr.left, ctx);
     if (!l.success) return l;
     if (!isTruthy(l.value)) return l;
     return evalExpr(expr.right, ctx);
   }
-  if (expr.op === "||") {
+  if (op === "||") {
     const l = evalExpr(expr.left, ctx);
     if (!l.success) return l;
     if (isTruthy(l.value)) return l;
     return evalExpr(expr.right, ctx);
   }
 
-  if (expr.op === "??") {
+  if (op === "??") {
     const l = evalExpr(expr.left, ctx);
     if (!l.success) return l;
     if (l.value !== null && l.value !== undefined) return l;
@@ -598,7 +610,7 @@ const evalBinaryExpr = (expr: BinaryExpr, ctx: Ctx): EvalResult => {
   const a = l.value;
   const b = r.value;
 
-  switch (expr.op) {
+  switch (op) {
     case "+":
       if (typeof a === "string" || typeof b === "string") {
         const left = toString(a);
@@ -632,7 +644,7 @@ const evalBinaryExpr = (expr: BinaryExpr, ctx: Ctx): EvalResult => {
       return { success: true, value: !looseEqualSafe(a, b, ctx) };
   }
 
-  return evalError("unknown binary operator", expr.span, ctx.steps);
+  return assertNever(op);
 };
 
 const evalMemberExpr = (expr: MemberExpr, ctx: Ctx): EvalResult => {
@@ -1156,6 +1168,20 @@ const validateAst = (
           }
           return { ok: true };
         };
+        const requireOperator = (
+          type: "unary" | "binary",
+        ): AstValidationResult => {
+          const field = readAstProperty(node, "op");
+          if (!field.ok) return astValidationError(field.message);
+          if (typeof field.value !== "string") {
+            return astValidationError("'op' must be a string");
+          }
+          const supported =
+            type === "unary" ? isUnaryOp(field.value) : isBinaryOp(field.value);
+          return supported
+            ? { ok: true }
+            : astValidationError(`unknown ${type} operator`);
+        };
 
         let result: AstValidationResult = { ok: true };
         switch (kind.value) {
@@ -1186,11 +1212,11 @@ const validateAst = (
             break;
           }
           case "unary":
-            result = requireType("op", "string");
+            result = requireOperator("unary");
             if (result.ok) queueChild("expr");
             break;
           case "binary":
-            result = requireType("op", "string");
+            result = requireOperator("binary");
             if (result.ok) queueChild("right");
             if (result.ok) queueChild("left");
             break;

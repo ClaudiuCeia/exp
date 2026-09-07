@@ -15,24 +15,49 @@ export type NodeBase = Readonly<{
 }>;
 
 /** Unary operator tokens supported by the expression language. */
-export type UnaryOp = "!" | "-" | "+";
+export const UNARY_OPERATORS = Object.freeze(["!", "-", "+"] as const);
+
+/** Binary operator tokens grouped from lowest to highest precedence. */
+export const BINARY_OPERATOR_GROUPS = Object.freeze([
+  Object.freeze(["||", "??"] as const),
+  Object.freeze(["&&"] as const),
+  Object.freeze(["==", "!="] as const),
+  Object.freeze(["<=", ">=", "<", ">"] as const),
+  Object.freeze(["+", "-"] as const),
+  Object.freeze(["*", "/", "%"] as const),
+] as const);
+
+/** All binary operator tokens supported by the expression language. */
+export const BINARY_OPERATORS: readonly BinaryOp[] = Object.freeze(
+  BINARY_OPERATOR_GROUPS.flatMap((operators) => operators),
+);
+
+/** Unary operator tokens supported by the expression language. */
+export type UnaryOp = (typeof UNARY_OPERATORS)[number];
 
 /** Binary operator tokens supported by the expression language. */
-export type BinaryOp =
-  | "+"
-  | "-"
-  | "*"
-  | "/"
-  | "%"
-  | "=="
-  | "!="
-  | "<"
-  | "<="
-  | ">"
-  | ">="
-  | "&&"
-  | "||"
-  | "??";
+export type BinaryOp = (typeof BINARY_OPERATOR_GROUPS)[number][number];
+
+const objectHasOwn = Object.hasOwn;
+
+const createOperatorLookup = (
+  operators: readonly string[],
+): Readonly<Record<string, true>> => {
+  const lookup: Record<string, true> = {};
+  for (const operator of operators) lookup[operator] = true;
+  return Object.freeze(lookup);
+};
+
+const unaryOperatorLookup = createOperatorLookup(UNARY_OPERATORS);
+const binaryOperatorLookup = createOperatorLookup(BINARY_OPERATORS);
+
+/** Return whether a value is a supported unary operator token. */
+export const isUnaryOp = (value: unknown): value is UnaryOp =>
+  typeof value === "string" && objectHasOwn(unaryOperatorLookup, value);
+
+/** Return whether a value is a supported binary operator token. */
+export const isBinaryOp = (value: unknown): value is BinaryOp =>
+  typeof value === "string" && objectHasOwn(binaryOperatorLookup, value);
 
 /**
  * Expression AST node.
