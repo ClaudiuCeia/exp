@@ -6,7 +6,14 @@ import {
   prepareEnvironment,
   type PreparedEnvironment,
 } from "../mod.ts";
-import type { Expr } from "../src/ast/mod.ts";
+import {
+  BINARY_OPERATOR_GROUPS,
+  BINARY_OPERATORS,
+  type BinaryOp,
+  type Expr,
+  UNARY_OPERATORS,
+  type UnaryOp,
+} from "../src/ast/mod.ts";
 import { evaluateAst, evaluateExpression, ExpEvalError } from "../src/eval.ts";
 import { isPlainObject, type RuntimeValue } from "../src/runtime.ts";
 
@@ -54,6 +61,56 @@ test("evaluateExpression handles unary ops", () => {
   assertEquals(res.success, true);
   if (!res.success) return;
   assertEquals(res.value, true);
+});
+
+test("evaluateExpression covers every declared operator", () => {
+  const unaryCases = {
+    "!": { source: "!false", expected: true },
+    "-": { source: "-2", expected: -2 },
+    "+": { source: "+'2'", expected: 2 },
+  } satisfies Readonly<
+    Record<UnaryOp, Readonly<{ source: string; expected: RuntimeValue }>>
+  >;
+  const binaryCases = {
+    "||": { source: "false || 2", expected: 2 },
+    "??": { source: "null ?? 2", expected: 2 },
+    "&&": { source: "true && 2", expected: 2 },
+    "==": { source: "1 == 1", expected: true },
+    "!=": { source: "1 != 2", expected: true },
+    "<=": { source: "1 <= 1", expected: true },
+    ">=": { source: "2 >= 1", expected: true },
+    "<": { source: "1 < 2", expected: true },
+    ">": { source: "2 > 1", expected: true },
+    "+": { source: "1 + 2", expected: 3 },
+    "-": { source: "3 - 2", expected: 1 },
+    "*": { source: "2 * 3", expected: 6 },
+    "/": { source: "6 / 2", expected: 3 },
+    "%": { source: "7 % 3", expected: 1 },
+  } satisfies Readonly<
+    Record<BinaryOp, Readonly<{ source: string; expected: RuntimeValue }>>
+  >;
+
+  for (const operator of UNARY_OPERATORS) {
+    const testCase = unaryCases[operator];
+    const result = evaluateExpression(testCase.source, { throwOnError: false });
+    assertEquals(result, { success: true, value: testCase.expected });
+  }
+  for (const operator of BINARY_OPERATORS) {
+    const testCase = binaryCases[operator];
+    const result = evaluateExpression(testCase.source, { throwOnError: false });
+    assertEquals(result, { success: true, value: testCase.expected });
+  }
+});
+
+test("operator declarations are frozen", () => {
+  assertEquals(Object.isFrozen(UNARY_OPERATORS), true);
+  assertEquals(Object.isFrozen(BINARY_OPERATORS), true);
+  assertEquals(Object.isFrozen(BINARY_OPERATOR_GROUPS), true);
+  for (const operators of Object.values(BINARY_OPERATOR_GROUPS)) {
+    assertEquals(Object.isFrozen(operators), true);
+  }
+  assertEquals(Reflect.set(UNARY_OPERATORS, "0", "~"), false);
+  assertEquals(Reflect.set(BINARY_OPERATORS, "0", "**"), false);
 });
 
 test("evaluateExpression supports string concatenation", () => {
@@ -2126,31 +2183,233 @@ test("evaluateExpression forwards parser resource limits", () => {
   assertEquals(res.error.steps, 0);
 });
 
-test("evaluateAst returns errors for unknown operators (defensive)", () => {
-  const badUnary = {
+test("evaluateAst rejects unknown operators before inspecting operands or env", () => {
+  let calls = 0;
+  let envInspections = 0;
+  const call = {
+    kind: "call",
+    callee: {
+      kind: "identifier",
+      name: "effect",
+      span: { start: 0, end: 6 },
+    },
+    args: [],
+    span: { start: 0, end: 8 },
+  };
+  const env = new Proxy(
+    {
+      effect: () => {
+        calls++;
+        return 1;
+      },
+    },
+    {
+      ownKeys(target) {
+        envInspections++;
+        return Reflect.ownKeys(target);
+      },
+    },
+  );
+  const cases = [
+    {
+      expr: {
+        kind: "unary",
+        op: "~",
+        expr: call,
+        span: { start: 0, end: 8 },
+      },
+      message: "invalid AST: unknown unary operator",
+    },
+    {
+      expr: {
+        kind: "unary",
+        op: "&&",
+        expr: call,
+        span: { start: 0, end: 8 },
+      },
+      message: "invalid AST: unknown unary operator",
+    },
+    {
+      expr: {
+        kind: "binary",
+        op: "**",
+        left: call,
+        right: call,
+        span: { start: 0, end: 8 },
+      },
+      message: "invalid AST: unknown binary operator",
+    },
+    {
+      expr: {
+        kind: "binary",
+        op: "!",
+        left: call,
+        right: call,
+        span: { start: 0, end: 8 },
+      },
+      message: "invalid AST: unknown binary operator",
+    },
+  ] as const;
+
+  for (const testCase of cases) {
+    const result = evaluateAst(testCase.expr as unknown as Expr, {
+      env,
+      maxSteps: 1,
+      throwOnError: false,
+    });
+    assertEquals(result, {
+      success: false,
+      error: { message: testCase.message, steps: 1 },
+    });
+  }
+  assertEquals(calls, 0);
+  assertEquals(envInspections, 0);
+
+  const exhausted = evaluateAst(cases[2].expr as unknown as Expr, {
+    env,
+    maxSteps: 0,
+    throwOnError: false,
+  });
+  assertEquals(exhausted, {
+    success: false,
+    error: { message: "invalid AST: validation budget exceeded", steps: 1 },
+  });
+  assertEquals(envInspections, 0);
+
+  const error = assertThrows(
+    () => evaluateAst(cases[2].expr as unknown as Expr, { env, maxSteps: 1 }),
+    ExpEvalError,
+    "invalid AST: unknown binary operator",
+  );
+  if (!(error instanceof ExpEvalError)) return;
+  assertEquals(error.steps, 1);
+  assertEquals(calls, 0);
+  assertEquals(envInspections, 0);
+});
+
+test("evaluateAst validates operator fields without invoking accessors", () => {
+  let getterCalls = 0;
+  const unary: Record<string, unknown> = {
     kind: "unary",
-    op: "~",
-    expr: { kind: "number", value: 1, span: { start: 0, end: 1 } },
+    expr: { kind: "number", value: 1, span: { start: 1, end: 2 } },
     span: { start: 0, end: 2 },
-  } as unknown as Expr;
+  };
+  Object.defineProperty(unary, "op", {
+    get() {
+      getterCalls++;
+      return "!";
+    },
+  });
 
-  const ur = evaluateAst(badUnary, { throwOnError: false });
-  assertEquals(ur.success, false);
-  if (ur.success) return;
-  assertMatch(ur.error.message, /unknown unary operator/);
+  const accessor = evaluateAst(unary as unknown as Expr, {
+    throwOnError: false,
+  });
+  assertEquals(accessor, {
+    success: false,
+    error: {
+      message: "invalid AST: 'op' must be an own data property",
+      steps: 1,
+    },
+  });
+  assertEquals(getterCalls, 0);
 
-  const badBinary = {
-    kind: "binary",
-    op: "**",
-    left: { kind: "number", value: 1, span: { start: 0, end: 1 } },
-    right: { kind: "number", value: 2, span: { start: 4, end: 5 } },
-    span: { start: 0, end: 5 },
-  } as unknown as Expr;
+  const nonString = evaluateAst(
+    {
+      kind: "binary",
+      op: 1,
+      left: { kind: "number", value: 1, span: { start: 0, end: 1 } },
+      right: { kind: "number", value: 2, span: { start: 2, end: 3 } },
+      span: { start: 0, end: 3 },
+    } as unknown as Expr,
+    { throwOnError: false },
+  );
+  assertEquals(nonString, {
+    success: false,
+    error: { message: "invalid AST: 'op' must be a string", steps: 1 },
+  });
+});
 
-  const br = evaluateAst(badBinary, { throwOnError: false });
-  assertEquals(br.success, false);
-  if (br.success) return;
-  assertMatch(br.error.message, /unknown binary operator/);
+test("evaluateAst operator validation uses captured membership intrinsics", () => {
+  const descriptor = Object.getOwnPropertyDescriptor(Object, "hasOwn");
+  if (descriptor === undefined) throw new Error("missing Object.hasOwn");
+
+  try {
+    Object.defineProperty(Object, "hasOwn", {
+      ...descriptor,
+      value: () => {
+        throw new Error("poisoned hasOwn ran");
+      },
+    });
+    const result = evaluateAst(
+      {
+        kind: "unary",
+        op: "~",
+        expr: { kind: "number", value: 1, span: { start: 1, end: 2 } },
+        span: { start: 0, end: 2 },
+      } as unknown as Expr,
+      { throwOnError: false },
+    );
+    assertEquals(result, {
+      success: false,
+      error: { message: "invalid AST: unknown unary operator", steps: 1 },
+    });
+  } finally {
+    Object.defineProperty(Object, "hasOwn", descriptor);
+  }
+});
+
+test("evaluateAst contains operator mutation after validation", () => {
+  const unary = new Proxy(
+    {
+      kind: "unary",
+      op: "!",
+      expr: { kind: "boolean", value: false, span: { start: 1, end: 2 } },
+      span: { start: 0, end: 2 },
+    },
+    {
+      get(target, property, receiver) {
+        return property === "op"
+          ? "~"
+          : Reflect.get(target, property, receiver);
+      },
+    },
+  );
+  const binary = new Proxy(
+    {
+      kind: "binary",
+      op: "+",
+      left: { kind: "number", value: 1, span: { start: 0, end: 1 } },
+      right: { kind: "number", value: 2, span: { start: 2, end: 3 } },
+      span: { start: 0, end: 3 },
+    },
+    {
+      get(target, property, receiver) {
+        return property === "op"
+          ? "**"
+          : Reflect.get(target, property, receiver);
+      },
+    },
+  );
+
+  assertEquals(evaluateAst(unary as unknown as Expr, { throwOnError: false }), {
+    success: false,
+    error: {
+      message: "unknown unary operator",
+      span: { start: 0, end: 2 },
+      steps: 1,
+    },
+  });
+  assertEquals(
+    evaluateAst(binary as unknown as Expr, { throwOnError: false }),
+    {
+      success: false,
+      error: {
+        message: "unknown binary operator",
+        span: { start: 0, end: 3 },
+        steps: 1,
+      },
+    },
+  );
 });
 
 test("evaluateAst rejects malformed nodes in non-throwing mode", () => {
