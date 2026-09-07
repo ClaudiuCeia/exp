@@ -14,6 +14,7 @@ import {
 import { std } from "./std.ts";
 
 const WeakSetConstructor = WeakSet;
+const arrayIsArray = Array.isArray;
 const weakSetHas = WeakSet.prototype.has;
 const weakSetAdd = WeakSet.prototype.add;
 const reflectApply = Reflect.apply;
@@ -147,7 +148,7 @@ const UNSUPPORTED_MEMBER_ERROR = "member is not a supported runtime value";
 
 const isRuntimeArray = (value: RuntimeValue): value is RuntimeArray => {
   try {
-    return Array.isArray(value);
+    return arrayIsArray(value);
   } catch {
     throw new Error(UNSUPPORTED_MEMBER_ERROR);
   }
