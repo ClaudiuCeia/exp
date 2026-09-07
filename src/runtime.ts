@@ -1,8 +1,8 @@
 /** Primitive runtime values supported by the evaluator. */
 export type RuntimePrimitive = undefined | null | boolean | number | string;
 
-/** A function callable from expressions (must accept/return `RuntimeValue`). */
-export type RuntimeFunction = (...args: RuntimeValue[]) => RuntimeValue;
+/** A host function callable by expressions but opaque to result consumers. */
+export type RuntimeFunction = (arg: never, ...args: never[]) => unknown;
 
 /** A readonly array of `RuntimeValue` entries. */
 export interface RuntimeArray extends ReadonlyArray<RuntimeValue> {}
@@ -33,6 +33,7 @@ type MutableRuntimeObject = { [key: string]: RuntimeValue };
 const ArrayConstructor = Array;
 const arrayFrom = Array.from;
 const arrayIsArray = Array.isArray;
+const numberIsSafeInteger = Number.isSafeInteger;
 const objectCreate = Object.create;
 const objectDefineProperty = Object.defineProperty;
 const objectEntries = Object.entries;
@@ -268,7 +269,9 @@ const traverseRuntimeValue = (
           if (
             lengthDescriptor === undefined ||
             !("value" in lengthDescriptor) ||
-            typeof lengthDescriptor.value !== "number"
+            typeof lengthDescriptor.value !== "number" ||
+            !numberIsSafeInteger(lengthDescriptor.value) ||
+            lengthDescriptor.value < 0
           ) {
             return traversalError(currentPath, "must be an Array");
           }
@@ -512,6 +515,24 @@ type NormalizedEnvironment = Readonly<{
   entries: number;
   containers: WeakSet<object> | undefined;
 }>;
+
+export const normalizeRuntimeValue = (
+  value: unknown,
+  limits: RuntimeValueLimits = { maxDepth: 64, maxEntries: 10_000 },
+): { ok: true; value: RuntimeValue } | { ok: false; message: string } => {
+  try {
+    return traverseRuntimeValue(value, "value", 0, {
+      entries: 0,
+      maxDepth: 0,
+      limits,
+      mode: "normalize",
+      seen: new WeakMapConstructor(),
+      containers: undefined,
+    });
+  } catch {
+    return { ok: false, message: "value inspection failed" };
+  }
+};
 
 const normalizeEnvironment = (
   env: unknown,

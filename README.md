@@ -295,11 +295,11 @@ objects before evaluation.
 The public `EnvironmentInput` type accepts application-owned object types,
 including named interfaces, readonly properties, and readonly arrays. It is a
 candidate input type rather than a static guarantee: the evaluator still
-validates the top-level object and every exposed value at runtime. Input arrays
-and plain objects are copied during normalization, so frozen inputs are
-supported and caller-owned data is not mutated. Runtime arrays and objects use
-readonly result types because trusted host functions may return frozen or
-otherwise readonly containers without copying them.
+validates the top-level object and every exposed value at runtime. Input and
+result arrays and plain objects are copied during normalization, so frozen
+containers are supported and caller-owned data is not mutated. Runtime arrays
+and objects also use readonly public types, so callers do not need mutable input
+containers to describe values accepted by the evaluator.
 
 Supported runtime values are:
 
@@ -395,7 +395,10 @@ together with their namespace. `env.std` is reserved.
 An expression can call functions supplied in `env`. Those functions are retained
 as trusted host functions rather than copied. They run with the same authority
 as the application and may access values captured by their closure. Their return
-values are validated after every call.
+values are validated after every call, and container results are normalized
+before being returned to the application. Function values in an evaluation
+result are intentionally opaque: invoke host functions through expressions so
+their results receive runtime validation.
 
 Expose narrow, synchronous, bounded functions. Prefer functions without side
 effects when expressions come from users or stored configuration.
@@ -481,6 +484,12 @@ the same defaults and validation. A later evaluation rejects the snapshot in
 constant time when its configured limit is below the graph requirement recorded
 during preparation. The evaluation limits continue to apply independently to
 every host-function return value.
+
+Before a successful value crosses the API boundary, container results are
+validated and copied once more. That pass uses a saturating combination of the
+AST and runtime graph budgets so a result may safely compose literal containers
+with multiple individually valid host-function results. Mutations performed by
+trusted host functions are included in this final validation.
 
 ## Persisted expressions
 

@@ -6,6 +6,7 @@ import {
   prepareEnvironment,
   type PreparedEnvironment,
   type RuntimeArray,
+  RuntimeFunction,
 } from "../mod.ts";
 import type { Expr } from "../src/ast/mod.ts";
 import { evaluateAst, evaluateExpression, ExpEvalError } from "../src/eval.ts";
@@ -499,6 +500,15 @@ test("evaluateExpression accepts readonly application environment types", () => 
 
   const typeContract: Readonly<{
     namedObject: ApplicationEnvironment extends EnvironmentInput ? true : false;
+    runtimeFunctionAcceptsValue: RuntimeValue extends Parameters<RuntimeFunction>[number]
+      ? true
+      : false;
+    runtimeFunctionRequiresArgument: [] extends Parameters<RuntimeFunction>
+      ? false
+      : true;
+    runtimeFunctionReturnsValue: ReturnType<RuntimeFunction> extends RuntimeValue
+      ? true
+      : false;
     runtimeArrayMutable: RuntimeArray extends {
       push(...values: RuntimeValue[]): number;
     }
@@ -508,6 +518,9 @@ test("evaluateExpression accepts readonly application environment types", () => 
     undefined: undefined extends EnvironmentInput ? true : false;
   }> = {
     namedObject: true,
+    runtimeFunctionAcceptsValue: false,
+    runtimeFunctionRequiresArgument: true,
+    runtimeFunctionReturnsValue: false,
     runtimeArrayMutable: false,
     string: false,
     undefined: false,
@@ -528,6 +541,9 @@ test("evaluateExpression accepts readonly application environment types", () => 
 
   assertEquals(typeContract, {
     namedObject: true,
+    runtimeFunctionAcceptsValue: false,
+    runtimeFunctionRequiresArgument: true,
+    runtimeFunctionReturnsValue: false,
     runtimeArrayMutable: false,
     string: false,
     undefined: false,
@@ -557,7 +573,7 @@ test("prepareEnvironment normalizes its input only once", () => {
   ]);
 });
 
-test("prepareEnvironment creates a deeply frozen snapshot", () => {
+test("prepareEnvironment isolates its frozen snapshot from result copies", () => {
   const source = {
     account: { plan: "pro" },
     quotas: [10, 20],
@@ -581,8 +597,8 @@ test("prepareEnvironment creates a deeply frozen snapshot", () => {
   if (!account.success || !quotas.success) return;
   assertEquals(account.value, { plan: "pro" });
   assertEquals(quotas.value, [10, 20]);
-  assertEquals(Object.isFrozen(account.value), true);
-  assertEquals(Object.isFrozen(quotas.value), true);
+  assertEquals(Object.isFrozen(account.value), false);
+  assertEquals(Object.isFrozen(quotas.value), false);
 });
 
 test("prepared containers cannot be mutated by host functions", () => {
@@ -1046,6 +1062,126 @@ test("prepared environment tokens are opaque and cannot be forged", () => {
   });
 });
 
+test("evaluateExpression returns mutable copies of frozen host arrays", () => {
+  const frozen = Object.freeze([1] as const);
+  const result = evaluateExpression("make()", {
+    env: { make: () => frozen },
+    throwOnError: false,
+  });
+
+  assertEquals(result.success, true);
+  if (!result.success || !Array.isArray(result.value)) return;
+  result.value.push(2);
+  assertEquals(result.value, [1, 2]);
+  assertEquals(frozen, [1]);
+});
+
+test("evaluateExpression keeps runtime limits scoped away from literals", () => {
+  const entries = evaluateExpression("[1]", {
+    maxRuntimeEntries: 0,
+    throwOnError: false,
+  });
+  const depth = evaluateExpression("[[]]", {
+    maxRuntimeDepth: 0,
+    throwOnError: false,
+  });
+
+  assertEquals(entries, { success: true, value: [1] });
+  assertEquals(depth, { success: true, value: [[]] });
+});
+
+test("evaluateExpression normalizes composed literal and host result graphs", () => {
+  const wide = evaluateExpression("[f(), f()]", {
+    env: { f: () => [1, 2] },
+    maxRuntimeEntries: 2,
+    maxSteps: 5,
+    throwOnError: false,
+  });
+  const deep = evaluateExpression("[[f()]]", {
+    env: { f: () => [[[1]]] },
+    maxDepth: 3,
+    maxRuntimeDepth: 3,
+    maxRuntimeEntries: 3,
+    maxSteps: 4,
+    throwOnError: false,
+  });
+
+  assertEquals(wide, {
+    success: true,
+    value: [
+      [1, 2],
+      [1, 2],
+    ],
+  });
+  assertEquals(deep, { success: true, value: [[[[[1]]]]] });
+});
+
+test("evaluateExpression result normalization includes the fixed std namespace", () => {
+  const result = evaluateExpression("std", {
+    maxRuntimeEntries: 0,
+    maxSteps: 1,
+    throwOnError: false,
+  });
+
+  assertEquals(result.success, true);
+  if (!result.success || !isPlainObject(result.value)) return;
+  assertEquals(typeof result.value.len, "function");
+});
+
+test("evaluateExpression normalizes containers mutated by host calls", () => {
+  const frozen = evaluateExpression("freeze(xs) || xs", {
+    env: {
+      xs: [1],
+      freeze: (value: RuntimeValue) => {
+        if (Array.isArray(value)) Object.freeze(value);
+        return false;
+      },
+    },
+    throwOnError: false,
+  });
+  assertEquals(frozen.success, true);
+  if (!frozen.success || !Array.isArray(frozen.value)) return;
+  frozen.value.push(2);
+  assertEquals(frozen.value, [1, 2]);
+
+  const invalid = evaluateExpression("invalidate(xs) || xs", {
+    env: {
+      xs: [1],
+      invalidate: (value: RuntimeValue) => {
+        if (Array.isArray(value)) value[0] = new Date();
+        return false;
+      },
+    },
+    throwOnError: false,
+  });
+  assertEquals(invalid.success, false);
+  if (invalid.success) return;
+  assertEquals(
+    invalid.error.message,
+    "evaluation result is not a supported runtime value",
+  );
+});
+
+test("evaluateExpression preserves host reference and receiver identity", () => {
+  const object: Record<string, RuntimeValue> = {};
+  object.isSelf = function (this: RuntimeValue): boolean {
+    return this === object;
+  };
+  const result = evaluateExpression(
+    "identity(object) == object && factory().isSelf()",
+    {
+      env: {
+        factory: () => object,
+        identity: (value: RuntimeValue) => value,
+        object,
+      },
+      throwOnError: false,
+    },
+  );
+
+  assertEquals(result, { success: true, value: true });
+});
+
 test("evaluateExpression rejects unsupported function return values", () => {
   const res = evaluateExpression("f()", {
     throwOnError: false,
@@ -1504,6 +1640,58 @@ test("evaluateAst uses captured descriptors for cached member reads", () => {
   }
 });
 
+test("evaluateAst uses captured array classification for cached owners", () => {
+  const descriptor = Object.getOwnPropertyDescriptor(Array, "isArray");
+  if (descriptor === undefined) throw new Error("missing Array.isArray");
+  const arrayIsArray = Array.isArray;
+  let inspectedOwners = 0;
+  const member = new Proxy(
+    {
+      kind: "member" as const,
+      object: {
+        kind: "identifier" as const,
+        name: "box",
+        span: { start: 0, end: 3 },
+      },
+      property: "secret",
+      span: { start: 0, end: 10 },
+    },
+    {
+      get(target, property, receiver) {
+        Object.defineProperty(Array, "isArray", {
+          ...descriptor,
+          value: (value: unknown) => {
+            if (
+              value !== null &&
+              typeof value === "object" &&
+              Object.hasOwn(value, "secret")
+            ) {
+              inspectedOwners++;
+              Object.defineProperty(value, "secret", {
+                value: new Date(),
+                enumerable: true,
+              });
+            }
+            return arrayIsArray(value);
+          },
+        });
+        return Reflect.get(target, property, receiver);
+      },
+    },
+  );
+
+  try {
+    const result = evaluateAst(member, {
+      env: { box: { secret: 1 } },
+      throwOnError: false,
+    });
+    assertEquals(result, { success: true, value: 1 });
+    assertEquals(inspectedOwners, 0);
+  } finally {
+    Object.defineProperty(Array, "isArray", descriptor);
+  }
+});
+
 test("evaluateExpression bounds runtime value normalization", () => {
   const nested = { child: { child: { value: 1 } } };
   const depthResult = evaluateExpression("nested.child", {
@@ -1625,16 +1813,18 @@ test("evaluateExpression does not cache containers mutated during validation", (
   assertEquals(res.error.message, "member is not a supported runtime value");
 });
 
-test("evaluateExpression validates cyclic function return values", () => {
+test("evaluateExpression normalizes cyclic function return values", () => {
   const value: Record<string, RuntimeValue> = {};
   value.self = value;
-  const res = evaluateExpression("f().self == f().self", {
+  const res = evaluateExpression("f()", {
     throwOnError: false,
     env: { f: () => value },
   });
   assertEquals(res.success, true);
   if (!res.success) return;
-  assertEquals(res.value, true);
+  assertEquals(isPlainObject(res.value), true);
+  if (!isPlainObject(res.value)) return;
+  assertEquals(res.value.self === res.value, true);
 });
 
 test("evaluateExpression allows structured return values", () => {
