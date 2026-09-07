@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import { assertEquals, assertMatch, assertThrows } from "./assert.ts";
-import type { EnvironmentInput, EvalOptions } from "../mod.ts";
+import type { EnvironmentInput, EvalOptions, RuntimeArray } from "../mod.ts";
 import type { Expr } from "../src/ast/mod.ts";
 import { evaluateAst, evaluateExpression, ExpEvalError } from "../src/eval.ts";
 import { isPlainObject, type RuntimeValue } from "../src/runtime.ts";
@@ -493,10 +493,16 @@ test("evaluateExpression accepts readonly application environment types", () => 
 
   const typeContract: Readonly<{
     namedObject: ApplicationEnvironment extends EnvironmentInput ? true : false;
+    runtimeArrayMutable: RuntimeArray extends {
+      push(...values: RuntimeValue[]): number;
+    }
+      ? true
+      : false;
     string: string extends EnvironmentInput ? true : false;
     undefined: undefined extends EnvironmentInput ? true : false;
   }> = {
     namedObject: true,
+    runtimeArrayMutable: false,
     string: false,
     undefined: false,
   };
@@ -516,6 +522,7 @@ test("evaluateExpression accepts readonly application environment types", () => 
 
   assertEquals(typeContract, {
     namedObject: true,
+    runtimeArrayMutable: false,
     string: false,
     undefined: false,
   });
@@ -1037,13 +1044,21 @@ test("evaluateExpression clears cached values before proxy validation", () => {
             Object.create(null) as Record<string, RuntimeValue>,
             { value: 0 },
           );
-          value.proxy = new Proxy(target, {
-            getOwnPropertyDescriptor(object, property) {
-              if (property === "value") {
-                safe.value = new Date() as unknown as RuntimeValue;
-              }
-              return Reflect.getOwnPropertyDescriptor(object, property);
-            },
+          Object.defineProperty(value, "proxy", {
+            enumerable: true,
+            configurable: true,
+            writable: true,
+            value: new Proxy(target, {
+              getOwnPropertyDescriptor(object, property) {
+                if (property === "value") {
+                  Object.defineProperty(safe, "value", {
+                    value: new Date(),
+                    enumerable: true,
+                  });
+                }
+                return Reflect.getOwnPropertyDescriptor(object, property);
+              },
+            }),
           });
           return 0;
         },
@@ -1068,13 +1083,21 @@ test("evaluateExpression does not cache containers mutated during validation", (
           Object.create(null) as Record<string, RuntimeValue>,
           { value: 0 },
         );
-        safe.proxy = new Proxy(target, {
-          getOwnPropertyDescriptor(object, property) {
-            if (property === "value") {
-              safe.value = new Date() as unknown as RuntimeValue;
-            }
-            return Reflect.getOwnPropertyDescriptor(object, property);
-          },
+        Object.defineProperty(safe, "proxy", {
+          enumerable: true,
+          configurable: true,
+          writable: true,
+          value: new Proxy(target, {
+            getOwnPropertyDescriptor(object, property) {
+              if (property === "value") {
+                Object.defineProperty(safe, "value", {
+                  value: new Date(),
+                  enumerable: true,
+                });
+              }
+              return Reflect.getOwnPropertyDescriptor(object, property);
+            },
+          }),
         });
         return 0;
       },

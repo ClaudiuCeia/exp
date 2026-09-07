@@ -297,7 +297,9 @@ including named interfaces, readonly properties, and readonly arrays. It is a
 candidate input type rather than a static guarantee: the evaluator still
 validates the top-level object and every exposed value at runtime. Input arrays
 and plain objects are copied during normalization, so frozen inputs are
-supported and caller-owned data is not mutated.
+supported and caller-owned data is not mutated. Runtime arrays and objects use
+readonly result types because trusted host functions may return frozen or
+otherwise readonly containers without copying them.
 
 Supported runtime values are:
 

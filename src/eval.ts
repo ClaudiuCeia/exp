@@ -6,6 +6,7 @@ import {
   isPlainObject,
   isRuntimeValue,
   normalizeEnv,
+  type RuntimeArray,
   type RuntimePrimitive,
   type RuntimeValue,
 } from "./runtime.ts";
@@ -144,7 +145,7 @@ const DEFAULT_MAX_ARRAY_ELEMENTS = 1_000;
 const DEFAULT_MAX_CALL_ARGUMENTS = DEFAULT_MAX_ARRAY_ELEMENTS;
 const UNSUPPORTED_MEMBER_ERROR = "member is not a supported runtime value";
 
-const isRuntimeArray = (value: RuntimeValue): value is RuntimeValue[] => {
+const isRuntimeArray = (value: RuntimeValue): value is RuntimeArray => {
   try {
     return Array.isArray(value);
   } catch {
