@@ -451,7 +451,7 @@ from untrusted sources.
 | `maxInputLength`    | `100_000` | UTF-16 code units in expression source         |
 | `maxNestingDepth`   |      `64` | Parentheses, arrays, and conditional nesting   |
 | `maxNodes`          |  `10_000` | AST node allocations during parsing            |
-| `maxSteps`          |  `10_000` | AST validation work and evaluation node visits |
+| `maxSteps`          |  `10_000` | AST validation and evaluator work units        |
 | `maxDepth`          |     `256` | AST validation and interpreter recursion depth |
 | `maxArrayElements`  |   `1_000` | Elements in one array literal                  |
 | `maxCallArguments`  |   `1_000` | Arguments in one call expression               |
@@ -465,20 +465,24 @@ allocated, and parsing stops at the first node that would exceed it. Transient
 nodes that are later replaced or discarded during parsing also count, so this
 can exceed the number of nodes reachable from the returned AST.
 
-These counters bound parser construction and AST traversal. Validation and
-evaluation each receive the configured `maxSteps` budget independently.
-Validation charges the root and every traversed AST edge, including repeated
-edges to a shared acyclic node; evaluation charges every node visit. Child-array
-and call-argument lengths are checked before their entries are traversed. These
-limits do not bound every individual operation, string size, numeric magnitude,
-or work inside application-provided functions. They are not a timeout and do
-not interrupt a slow environment function.
+Validation and evaluation each receive the configured `maxSteps` budget
+independently. Validation charges the root and every traversed AST edge,
+including repeated edges to a shared acyclic node. Evaluation charges every
+visited node plus variable-size work in identifier and member lookup, built-in
+coercion and string operations, standard-library helpers, and runtime-value
+validation. Search helpers charge incrementally, while native bulk operations
+reserve their work before running. Child-array and call-argument lengths are
+checked before their entries are traversed.
+
+The counters do not limit the size of a value returned directly, numeric
+magnitude, or work inside application-provided functions. They are not a timeout
+and do not interrupt a slow environment function.
 
 `prepareEnvironment()` accepts `maxRuntimeDepth` and `maxRuntimeEntries` with
 the same defaults and validation. A later evaluation rejects the snapshot in
 constant time when its configured limit is below the graph requirement recorded
-during preparation. The evaluation limits continue to apply independently to
-every host-function return value.
+during preparation. Every host-function return value is traversed under the
+runtime limits and charged cumulatively to the evaluation work budget.
 
 ## Persisted expressions
 

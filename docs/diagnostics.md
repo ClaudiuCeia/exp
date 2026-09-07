@@ -4,7 +4,7 @@ Parser and evaluator failures use different source locations.
 
 - Parser failures provide `index`, a zero-based UTF-16 code-unit offset.
 - Evaluator failures tied to an AST node provide its half-open `span`.
-- Evaluator failures provide the `steps` counter when available.
+- Evaluator failures provide the `steps` work counter when available.
 
 `formatDiagnosticReport()` accepts either location form.
 
@@ -57,7 +57,7 @@ Output from the checked example:
   |    ╰─▶ unknown identifier 'missing'
 ```
 
-The failure has `span: { start: 0, end: 7 }` and `steps: 2`.
+The failure has `span: { start: 0, end: 7 }` and `steps: 9`.
 
 Both reports are generated and checked in
 [`examples/diagnostics.ts`](../examples/diagnostics.ts) and

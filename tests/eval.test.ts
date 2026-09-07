@@ -708,7 +708,7 @@ test("prepared host returns obey re-rooted runtime depth limits", () => {
     error: {
       message: "function returned an unsupported value",
       span: { start: 0, end: 14 },
-      steps: 3,
+      steps: 25,
     },
   });
 });
@@ -1033,7 +1033,7 @@ test("prepared environment tokens are opaque and cannot be forged", () => {
     error: {
       message: "unknown identifier 'value'",
       span: { start: 0, end: 5 },
-      steps: 1,
+      steps: 6,
     },
   });
 });
@@ -1839,6 +1839,176 @@ test("evaluateExpression enforces step budgets", () => {
   assertMatch(res.error.message, /budget exceeded/);
 });
 
+test("evaluateAst exhausts evaluation work on repeated shared nodes", () => {
+  const leaf: Expr = {
+    kind: "number",
+    value: 1,
+    span: { start: 2, end: 3 },
+  };
+  const shared: Expr = {
+    kind: "unary",
+    op: "+",
+    expr: leaf,
+    span: { start: 1, end: 3 },
+  };
+  const expr: Expr = {
+    kind: "array",
+    elements: [shared, shared],
+    span: { start: 0, end: 7 },
+  };
+
+  assertEquals(evaluateAst(expr, { maxSteps: 4, throwOnError: false }), {
+    success: false,
+    error: {
+      message: "evaluation budget exceeded",
+      span: { start: 2, end: 3 },
+      steps: 5,
+    },
+  });
+});
+
+test("evaluateExpression charges string concatenation before allocation", () => {
+  const options = {
+    env: { s: "12345678" },
+    throwOnError: false,
+  } as const;
+
+  assertEquals(evaluateExpression("s + s", { ...options, maxSteps: 20 }), {
+    success: false,
+    error: {
+      message: "evaluation budget exceeded",
+      span: { start: 0, end: 5 },
+      steps: 21,
+    },
+  });
+  assertEquals(evaluateExpression("s + s", { ...options, maxSteps: 21 }), {
+    success: true,
+    value: "1234567812345678",
+  });
+});
+
+test("evaluateExpression charges string-to-number coercion", () => {
+  const options = {
+    env: { s: "12345678" },
+    throwOnError: false,
+  } as const;
+
+  assertEquals(evaluateExpression("+s", { ...options, maxSteps: 10 }), {
+    success: false,
+    error: {
+      message: "evaluation budget exceeded",
+      span: { start: 0, end: 2 },
+      steps: 11,
+    },
+  });
+  assertEquals(evaluateExpression("+s", { ...options, maxSteps: 11 }), {
+    success: true,
+    value: 12_345_678,
+  });
+});
+
+test("evaluateExpression charges function-return graphs cumulatively", () => {
+  let calls = 0;
+  const env = {
+    f: () => {
+      calls++;
+      return [1, 2, 3, 4];
+    },
+  };
+
+  assertEquals(
+    evaluateExpression("f()", {
+      env,
+      maxSteps: 7,
+      throwOnError: false,
+    }),
+    {
+      success: false,
+      error: {
+        message: "evaluation budget exceeded",
+        span: { start: 0, end: 3 },
+        steps: 8,
+      },
+    },
+  );
+  assertEquals(calls, 1);
+  assertEquals(
+    evaluateExpression("f()", {
+      env,
+      maxSteps: 8,
+      throwOnError: false,
+    }),
+    { success: true, value: [1, 2, 3, 4] },
+  );
+  assertEquals(calls, 2);
+  assertEquals(
+    evaluateExpression("[f(), f()]", {
+      env,
+      maxSteps: 16,
+      throwOnError: false,
+    }),
+    {
+      success: false,
+      error: {
+        message: "evaluation budget exceeded",
+        span: { start: 6, end: 9 },
+        steps: 17,
+      },
+    },
+  );
+  assertEquals(calls, 4);
+});
+
+test("runtime graph limits take precedence before entry work is charged", () => {
+  assertEquals(
+    evaluateExpression("f()", {
+      env: { f: () => Array.from({ length: 100 }) },
+      maxRuntimeEntries: 10,
+      maxSteps: 20,
+      throwOnError: false,
+    }),
+    {
+      success: false,
+      error: {
+        message: "function returned an unsupported value",
+        span: { start: 0, end: 3 },
+        steps: 4,
+      },
+    },
+  );
+});
+
+test("runtime depth limits take precedence before container work is charged", () => {
+  assertEquals(
+    evaluateExpression("f()", {
+      env: { f: () => ({ child: {} }) },
+      maxRuntimeDepth: 0,
+      maxRuntimeEntries: 10,
+      maxSteps: 5,
+      throwOnError: false,
+    }),
+    {
+      success: false,
+      error: {
+        message: "function returned an unsupported value",
+        span: { start: 0, end: 3 },
+        steps: 5,
+      },
+    },
+  );
+});
+
+test("evaluateExpression does not charge short-circuited string work", () => {
+  assertEquals(
+    evaluateExpression("false && std.upper(s)", {
+      env: { s: "x".repeat(100_000) },
+      maxSteps: 6,
+      throwOnError: false,
+    }),
+    { success: true, value: false },
+  );
+});
+
 test("evaluateExpression enforces array literal size budgets", () => {
   const res = evaluateExpression("[1, 2]", {
     throwOnError: false,
@@ -2176,7 +2346,7 @@ test("evaluateAst counts unique and aliased call argument edges", () => {
     const accepted = evaluateAst(expr, {
       env: { count: (...values: RuntimeValue[]) => values.length },
       throwOnError: false,
-      maxSteps: 6,
+      maxSteps: 11,
     });
     assertEquals(accepted.success, true);
     if (accepted.success) assertEquals(accepted.value, 4);
