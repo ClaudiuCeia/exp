@@ -6,6 +6,7 @@ import {
   isPlainObject,
   isRuntimeValue,
   normalizeEnv,
+  normalizeRuntimeValue,
   type RuntimeArray,
   type RuntimePrimitive,
   type RuntimeValue,
@@ -24,6 +25,7 @@ const objectDefineProperty = Object.defineProperty;
 const objectEntries = Object.entries;
 const objectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 const objectHasOwn = Object.hasOwn;
+const standardLibraryEntryCount = objectEntries(std).length;
 
 const createContainerSet = (): WeakSet<object> =>
   new WeakSetConstructor<object>();
@@ -145,6 +147,15 @@ const FORBIDDEN_MEMBERS = new Set(["__proto__", "prototype", "constructor"]);
 const DEFAULT_MAX_ARRAY_ELEMENTS = 1_000;
 const DEFAULT_MAX_CALL_ARGUMENTS = DEFAULT_MAX_ARRAY_ELEMENTS;
 const UNSUPPORTED_MEMBER_ERROR = "member is not a supported runtime value";
+const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
+
+const saturatingAdd = (left: number, right: number): number =>
+  left > MAX_SAFE_INTEGER - right ? MAX_SAFE_INTEGER : left + right;
+
+const saturatingMultiply = (left: number, right: number): number =>
+  left !== 0 && right > MAX_SAFE_INTEGER / left
+    ? MAX_SAFE_INTEGER
+    : left * right;
 
 const isRuntimeArray = (value: RuntimeValue): value is RuntimeArray => {
   try {
@@ -468,7 +479,7 @@ const evalCallExpr = (expr: CallExpr, ctx: Ctx): EvalResult => {
   }
 
   ctx.currentContainers = createContainerSet();
-  const out = receiver === undefined ? fn(...args) : fn.apply(receiver, args);
+  const out: unknown = reflectApply(fn, receiver, args);
   if (
     !isRuntimeValue(out, {
       maxDepth: ctx.maxRuntimeDepth,
@@ -926,6 +937,7 @@ export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
   }
 
   let res: EvalResult;
+  let resultSteps = 0;
   try {
     if (objectHasOwn(envRes.env, "std")) {
       res = evalError(
@@ -975,12 +987,29 @@ export function evaluateAst(expr: Expr, opts: EvalOptions = {}): EvalResult {
         unknownIdentifier: opts.unknownIdentifier ?? "error",
       };
       res = evalExpr(expr, ctx);
+      resultSteps = ctx.steps;
     }
   } catch {
     res = evalError("evaluation setup failed", undefined, 0);
   }
 
-  if (res.success) return res;
+  if (res.success) {
+    const resultMaxEntries = saturatingAdd(
+      saturatingAdd(maxRuntimeEntries, standardLibraryEntryCount),
+      saturatingMultiply(maxSteps, saturatingAdd(maxRuntimeEntries, 1)),
+    );
+    const normalized = normalizeRuntimeValue(res.value, {
+      maxDepth: saturatingAdd(maxDepth, maxRuntimeDepth),
+      maxEntries: resultMaxEntries,
+    });
+    if (normalized.ok) return { success: true, value: normalized.value };
+    const error: EvalError = {
+      message: "evaluation result is not a supported runtime value",
+      steps: resultSteps,
+    };
+    if (throwOnError) throw new ExpEvalError(error);
+    return { success: false, error };
+  }
   if (throwOnError) throw new ExpEvalError(res.error);
   return res;
 }
