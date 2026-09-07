@@ -81,8 +81,10 @@ edges reference the same shared acyclic node. Evaluation charges every node
 visit. `maxArrayElements` and `maxCallArguments` reject oversized child arrays
 before individual entries are inspected. `maxRuntimeDepth` and
 `maxRuntimeEntries` limit supported environment and function-return graphs.
-None of these options interrupts host function work. String length and work
-inside standard string helpers are not metered by `maxSteps`.
+Runtime graph traversal is iterative, so configured depths are not limited by
+the JavaScript call stack. None of these options interrupts host function work.
+String length and work inside standard string helpers are not metered by
+`maxSteps`.
 
 ## Isolation
 
