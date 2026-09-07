@@ -8,6 +8,11 @@ import {
 import { generatedFilterAccepted } from "./model-generated-filter.ts";
 import { matches, result as primaryResult } from "./primary-filter.ts";
 import {
+  preparedEnvironment,
+  preparedPlanResult,
+  preparedUsageResult,
+} from "./prepared-environment.ts";
+import {
   expressionSource,
   expressionSpan,
   matchingIssues,
@@ -78,5 +83,14 @@ const pipelineResult = evaluateExpression(
 assert(pipelineResult.success, "pipeline should evaluate successfully");
 assert(pipelineResult.value === true, "pipeline should return true");
 assert(generatedFilterAccepted, "model-generated filter should require true");
+assert(Object.isFrozen(preparedEnvironment), "prepared token should be frozen");
+assert(
+  preparedPlanResult.success && preparedPlanResult.value === true,
+  "prepared environment should evaluate the plan",
+);
+assert(
+  preparedUsageResult.success && preparedUsageResult.value === true,
+  "prepared environment should be reusable",
+);
 
 console.log("README examples passed");

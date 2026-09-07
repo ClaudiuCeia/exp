@@ -1,9 +1,11 @@
 import { test } from "bun:test";
 import { assertEquals, assertMatch, assertThrows } from "./assert.ts";
-import type {
-  EnvironmentInput,
-  EvalOptions,
-  RuntimeArray,
+import {
+  type EnvironmentInput,
+  type EvalOptions,
+  prepareEnvironment,
+  type PreparedEnvironment,
+  type RuntimeArray,
   RuntimeFunction,
 } from "../mod.ts";
 import type { Expr } from "../src/ast/mod.ts";
@@ -549,6 +551,515 @@ test("evaluateExpression accepts readonly application environment types", () => 
   assertEquals(res.success, true);
   if (!res.success) return;
   assertEquals(res.value, "Ada:3:8:1");
+});
+
+test("prepareEnvironment normalizes its input only once", () => {
+  const preparedResult = countPropertyDescriptorTraversals(() =>
+    prepareEnvironment({ account: { plan: "pro" } }),
+  );
+  const prepared: PreparedEnvironment = preparedResult.result;
+  const options: EvalOptions = { env: prepared, throwOnError: false };
+
+  const evaluations = countPropertyDescriptorTraversals(() => [
+    evaluateExpression("account.plan", options),
+    evaluateExpression("account.plan", options),
+  ]);
+
+  assertEquals(preparedResult.descriptorReads, 2);
+  assertEquals(evaluations.descriptorReads, 0);
+  assertEquals(evaluations.result, [
+    { success: true, value: "pro" },
+    { success: true, value: "pro" },
+  ]);
+});
+
+test("prepareEnvironment isolates its frozen snapshot from result copies", () => {
+  const source = {
+    account: { plan: "pro" },
+    quotas: [10, 20],
+  };
+  const prepared = prepareEnvironment(source);
+
+  source.account.plan = "free";
+  source.quotas.push(30);
+
+  const account = evaluateExpression("account", {
+    env: prepared,
+    throwOnError: false,
+  });
+  const quotas = evaluateExpression("quotas", {
+    env: prepared,
+    throwOnError: false,
+  });
+
+  assertEquals(account.success, true);
+  assertEquals(quotas.success, true);
+  if (!account.success || !quotas.success) return;
+  assertEquals(account.value, { plan: "pro" });
+  assertEquals(quotas.value, [10, 20]);
+  assertEquals(Object.isFrozen(account.value), false);
+  assertEquals(Object.isFrozen(quotas.value), false);
+});
+
+test("prepared containers cannot be mutated by host functions", () => {
+  let receiverWasFrozen = false;
+  const prepared = prepareEnvironment({
+    account: {
+      plan: "pro",
+      mutate(this: object) {
+        receiverWasFrozen = Object.isFrozen(this);
+        return Reflect.set(this, "plan", "free");
+      },
+    },
+  });
+
+  const mutation = evaluateExpression("account.mutate()", {
+    env: prepared,
+    throwOnError: false,
+  });
+  const plan = evaluateExpression("account.plan", {
+    env: prepared,
+    throwOnError: false,
+  });
+
+  assertEquals(mutation, { success: true, value: false });
+  assertEquals(plan, { success: true, value: "pro" });
+  assertEquals(receiverWasFrozen, true);
+});
+
+test("prepareEnvironment preserves aliases and cycles", () => {
+  const shared = { value: 1 };
+  const node: Record<string, RuntimeValue> = {};
+  node.self = node;
+  const values: RuntimeValue[] = [];
+  values.push(values);
+  const prepared = prepareEnvironment({
+    a: shared,
+    b: shared,
+    node,
+    values,
+  });
+
+  const aliases = evaluateExpression("a == b", {
+    env: prepared,
+    throwOnError: false,
+  });
+  const objectCycle = evaluateExpression("node.self == node", {
+    env: prepared,
+    throwOnError: false,
+  });
+  const arrayCycle = evaluateExpression("std.includes(values, values)", {
+    env: prepared,
+    throwOnError: false,
+  });
+
+  assertEquals(aliases, { success: true, value: true });
+  assertEquals(objectCycle, { success: true, value: true });
+  assertEquals(arrayCycle, { success: true, value: true });
+});
+
+test("prepared host functions retain identity and live closure state", () => {
+  let count = 0;
+  const next = (): number => ++count;
+  const prepared = prepareEnvironment({ next });
+
+  const first = evaluateExpression("next()", {
+    env: prepared,
+    throwOnError: false,
+  });
+  const second = evaluateExpression("next()", {
+    env: prepared,
+    throwOnError: false,
+  });
+  const identity = evaluateExpression("next", {
+    env: prepared,
+    throwOnError: false,
+  });
+
+  assertEquals(first, { success: true, value: 1 });
+  assertEquals(second, { success: true, value: 2 });
+  assertEquals(identity.success, true);
+  if (!identity.success) return;
+  assertEquals(identity.value === next, true);
+  assertEquals(Object.isFrozen(next), false);
+});
+
+test("prepared host returns are validated on every call", () => {
+  let valid = true;
+  const prepared = prepareEnvironment({
+    value: () => (valid ? { nested: { result: 1 } } : new Date()),
+  });
+
+  const first = evaluateExpression("value().nested.result", {
+    env: prepared,
+    maxRuntimeDepth: 1,
+    throwOnError: false,
+  });
+  valid = false;
+  const second = evaluateExpression("value()", {
+    env: prepared,
+    maxRuntimeDepth: 1,
+    throwOnError: false,
+  });
+
+  assertEquals(first, { success: true, value: 1 });
+  assertEquals(second.success, false);
+  if (second.success) return;
+  assertEquals(second.error.message, "function returned an unsupported value");
+});
+
+test("prepared host returns obey re-rooted runtime depth limits", () => {
+  const leaf = { next: { next: { value: 1 } } };
+  const root = { next: { next: { leaf } } };
+  const prepared = prepareEnvironment(
+    {
+      leaf,
+      root,
+      identity: (value: RuntimeValue) => value,
+    },
+    { maxRuntimeDepth: 4, maxRuntimeEntries: 10 },
+  );
+
+  const result = evaluateExpression("identity(root)", {
+    env: prepared,
+    maxRuntimeDepth: 4,
+    maxRuntimeEntries: 10,
+    throwOnError: false,
+  });
+
+  assertEquals(result, {
+    success: false,
+    error: {
+      message: "function returned an unsupported value",
+      span: { start: 0, end: 14 },
+      steps: 3,
+    },
+  });
+});
+
+test("prepared environments retain exact runtime graph requirements", () => {
+  const prepared = prepareEnvironment(
+    { nested: { value: 1 } },
+    { maxRuntimeDepth: 1, maxRuntimeEntries: 2 },
+  );
+
+  const exact = evaluateExpression("nested.value", {
+    env: prepared,
+    maxRuntimeDepth: 1,
+    maxRuntimeEntries: 2,
+    throwOnError: false,
+  });
+  const shallow = evaluateExpression("nested.value", {
+    env: prepared,
+    maxRuntimeDepth: 0,
+    maxRuntimeEntries: 2,
+    throwOnError: false,
+  });
+  const small = evaluateExpression("nested.value", {
+    env: prepared,
+    maxRuntimeDepth: 1,
+    maxRuntimeEntries: 1,
+    throwOnError: false,
+  });
+
+  assertEquals(exact, { success: true, value: 1 });
+  assertEquals(shallow, {
+    success: false,
+    error: {
+      message: "prepared environment requires maxRuntimeDepth >= 1; received 0",
+      steps: 0,
+    },
+  });
+  assertEquals(small, {
+    success: false,
+    error: {
+      message:
+        "prepared environment requires maxRuntimeEntries >= 2; received 1",
+      steps: 0,
+    },
+  });
+});
+
+test("prepareEnvironment rejects invalid limits and values", () => {
+  const invalidDepth = assertThrows(
+    () => prepareEnvironment({}, { maxRuntimeDepth: 0.5 }),
+    ExpEvalError,
+  );
+  assertEquals(
+    invalidDepth.message,
+    "maxRuntimeDepth must be a non-negative safe integer",
+  );
+
+  const invalidLimit = assertThrows(
+    () => prepareEnvironment({}, { maxRuntimeEntries: -1 }),
+    ExpEvalError,
+  );
+  assertEquals(
+    invalidLimit.message,
+    "maxRuntimeEntries must be a non-negative safe integer",
+  );
+  if (invalidLimit instanceof ExpEvalError) {
+    assertEquals(invalidLimit.steps, 0);
+  }
+
+  const invalidValue = assertThrows(
+    () => prepareEnvironment({ value: new Date() }),
+    ExpEvalError,
+  );
+  assertEquals(
+    invalidValue.message,
+    "env['value'] is not a supported runtime value",
+  );
+
+  const reserved = assertThrows(
+    () => prepareEnvironment({ std: 1 }),
+    ExpEvalError,
+  );
+  assertEquals(
+    reserved.message,
+    "env['std'] is reserved (stdlib is always available as std.*)",
+  );
+
+  const hostile = new Proxy(
+    {},
+    {
+      getPrototypeOf() {
+        throw new Error("inspection ran");
+      },
+    },
+  );
+  const inspection = assertThrows(
+    () => prepareEnvironment(hostile),
+    ExpEvalError,
+  );
+  assertEquals(inspection.message, "environment inspection failed");
+
+  const untypedPrepare: unknown = prepareEnvironment;
+  if (typeof untypedPrepare !== "function") {
+    throw new Error("prepareEnvironment is not callable");
+  }
+  const missing = assertThrows(
+    () => Reflect.apply(untypedPrepare, undefined, [undefined]),
+    ExpEvalError,
+  );
+  assertEquals(
+    missing.message,
+    "env must be a plain object (or proto-null object)",
+  );
+});
+
+test("prepareEnvironment rejects accessors without invoking them", () => {
+  let called = 0;
+  const env = {};
+  Object.defineProperty(env, "value", {
+    enumerable: true,
+    get() {
+      called++;
+      return 1;
+    },
+  });
+
+  const error = assertThrows(() => prepareEnvironment(env), ExpEvalError);
+
+  assertEquals(error.message, "env['value'] must be a data property");
+  assertEquals(called, 0);
+});
+
+test("prepareEnvironment only freezes captured library allocations", () => {
+  const arrayFromDescriptor = Object.getOwnPropertyDescriptor(Array, "from");
+  const createDescriptor = Object.getOwnPropertyDescriptor(Object, "create");
+  if (arrayFromDescriptor === undefined || createDescriptor === undefined) {
+    throw new Error("missing clone constructor descriptors");
+  }
+
+  const sourceArray = [1];
+  const sourceObject = { value: 2 };
+  let prototypeReads = 0;
+  const env = new Proxy(
+    { sourceArray, sourceObject },
+    {
+      getPrototypeOf(target) {
+        prototypeReads++;
+        if (prototypeReads === 2) {
+          Object.defineProperty(Array, "from", {
+            ...arrayFromDescriptor,
+            value: () => sourceArray,
+          });
+          Object.defineProperty(Object, "create", {
+            ...createDescriptor,
+            value: () => sourceObject,
+          });
+        }
+        return Reflect.getPrototypeOf(target);
+      },
+    },
+  );
+
+  let prepared: PreparedEnvironment | undefined;
+  try {
+    prepared = prepareEnvironment(env);
+  } finally {
+    Reflect.defineProperty(Array, "from", arrayFromDescriptor);
+    Reflect.defineProperty(Object, "create", createDescriptor);
+  }
+
+  assertEquals(prototypeReads, 2);
+  assertEquals(Object.isFrozen(sourceArray), false);
+  assertEquals(Object.isFrozen(sourceObject), false);
+  if (prepared === undefined) return;
+  const result = evaluateExpression("sourceArray.length + sourceObject.value", {
+    env: prepared,
+    throwOnError: false,
+  });
+  assertEquals(result, { success: true, value: 3 });
+});
+
+test("prepareEnvironment ignores poisoned numeric array setters", () => {
+  const descriptor = Object.getOwnPropertyDescriptor(Array.prototype, "0");
+  let writes = 0;
+  let prototypeReads = 0;
+  const env = new Proxy(
+    { values: [1] },
+    {
+      getPrototypeOf(target) {
+        prototypeReads++;
+        if (prototypeReads === 2) {
+          Object.defineProperty(Array.prototype, "0", {
+            configurable: true,
+            set() {
+              writes++;
+              Object.defineProperty(this, "0", {
+                value: new Date(),
+                enumerable: true,
+                writable: true,
+                configurable: true,
+              });
+            },
+          });
+        }
+        return Reflect.getPrototypeOf(target);
+      },
+    },
+  );
+
+  let prepared: PreparedEnvironment | undefined;
+  try {
+    prepared = prepareEnvironment(env);
+  } finally {
+    if (descriptor === undefined) {
+      Reflect.deleteProperty(Array.prototype, "0");
+    } else {
+      Reflect.defineProperty(Array.prototype, "0", descriptor);
+    }
+  }
+
+  assertEquals(prototypeReads, 2);
+  assertEquals(writes, 0);
+  if (prepared === undefined) return;
+  const result = evaluateExpression("std.includes(values, 1)", {
+    env: prepared,
+    throwOnError: false,
+  });
+  assertEquals(result, { success: true, value: true });
+});
+
+test("prepared member reads use captured descriptor inspection", () => {
+  const descriptor = Object.getOwnPropertyDescriptor(
+    Object,
+    "getOwnPropertyDescriptor",
+  );
+  if (descriptor === undefined) {
+    throw new Error("missing Object.getOwnPropertyDescriptor");
+  }
+  const unsupported = new Date();
+  const originalGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+  const prepared = prepareEnvironment({
+    account: {},
+    poison: () => {
+      Object.defineProperty(Object, "getOwnPropertyDescriptor", {
+        ...descriptor,
+        value: (value: object, property: PropertyKey) =>
+          property === "secret"
+            ? {
+                configurable: true,
+                enumerable: true,
+                value: unsupported,
+                writable: true,
+              }
+            : originalGetOwnPropertyDescriptor(value, property),
+      });
+      return true;
+    },
+  });
+
+  try {
+    const result = evaluateExpression("poison() && account.secret", {
+      env: prepared,
+      throwOnError: false,
+    });
+    assertEquals(result, { success: true, value: undefined });
+  } finally {
+    Reflect.defineProperty(Object, "getOwnPropertyDescriptor", descriptor);
+  }
+});
+
+test("prepared environment lookup uses captured weak-map operations", () => {
+  const prepared = prepareEnvironment({ value: 1 });
+  const descriptor = Object.getOwnPropertyDescriptor(WeakMap.prototype, "get");
+  if (descriptor === undefined)
+    throw new Error("missing WeakMap.prototype.get");
+
+  try {
+    Object.defineProperty(WeakMap.prototype, "get", {
+      ...descriptor,
+      value: () => undefined,
+    });
+    const result = evaluateExpression("value", {
+      env: prepared,
+      throwOnError: false,
+    });
+    assertEquals(result, { success: true, value: 1 });
+  } finally {
+    Reflect.defineProperty(WeakMap.prototype, "get", descriptor);
+  }
+});
+
+test("prepared environment tokens are opaque and cannot be forged", () => {
+  const prepared = prepareEnvironment({ value: 1 });
+  const forged = Object.create(Object.getPrototypeOf(prepared));
+  const cloned = structuredClone(prepared);
+
+  const real = evaluateExpression("value", {
+    env: prepared,
+    throwOnError: false,
+  });
+  const fake = evaluateExpression("value", {
+    env: forged,
+    throwOnError: false,
+  });
+  const transferred = evaluateExpression("value", {
+    env: cloned,
+    throwOnError: false,
+  });
+
+  assertEquals(Object.isFrozen(prepared), true);
+  assertEquals(Reflect.ownKeys(prepared), []);
+  assertEquals(real, { success: true, value: 1 });
+  assertEquals(fake, {
+    success: false,
+    error: {
+      message: "env must be a plain object (or proto-null object)",
+      steps: 0,
+    },
+  });
+  assertEquals(transferred, {
+    success: false,
+    error: {
+      message: "unknown identifier 'value'",
+      span: { start: 0, end: 5 },
+      steps: 1,
+    },
+  });
 });
 
 test("evaluateExpression returns mutable copies of frozen host arrays", () => {

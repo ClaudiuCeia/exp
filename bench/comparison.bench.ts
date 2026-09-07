@@ -1,6 +1,6 @@
 import { bench, group, run } from "mitata";
 import type { Expr } from "../src/ast/mod.ts";
-import { evaluateAst, evaluateExpression } from "../src/eval.ts";
+import * as evaluator from "../src/eval.ts";
 import { parseExpression } from "../src/parse.ts";
 import type { Env } from "../src/runtime.ts";
 import {
@@ -10,6 +10,8 @@ import {
   SIMPLE_ENV,
   SIMPLE_EXPRESSION,
 } from "./fixtures.ts";
+
+const { evaluateAst, evaluateExpression } = evaluator;
 
 function nestedPreflightInput(depth: number): string {
   return "@" + "(".repeat(depth) + ")".repeat(depth);
@@ -106,8 +108,15 @@ function rejectFlatInput(input: string, maxNodes: number): void {
 }
 
 function evaluateRuntimeMembers(workload: RuntimeMemberWorkload): void {
+  evaluateRuntimeMembersWithEnv(workload, workload.env);
+}
+
+function evaluateRuntimeMembersWithEnv(
+  workload: RuntimeMemberWorkload,
+  env: object,
+): void {
   const result = evaluateAst(workload.ast, {
-    env: workload.env,
+    env,
     throwOnError: true,
   });
   if (!result.success || result.value !== workload.expected) {
@@ -115,6 +124,18 @@ function evaluateRuntimeMembers(workload: RuntimeMemberWorkload): void {
   }
   sink = result.value;
 }
+
+function prepareIfSupported(env: Env): object {
+  const candidate: unknown = Reflect.get(evaluator, "prepareEnvironment");
+  if (typeof candidate !== "function") return env;
+  const prepared: unknown = Reflect.apply(candidate, undefined, [env]);
+  if (prepared === null || typeof prepared !== "object") {
+    throw new Error("prepareEnvironment returned an unexpected value");
+  }
+  return prepared;
+}
+
+const preparedRuntimeMember16x1k = prepareIfSupported(runtimeMember16x1k.env);
 
 const cases = [
   {
@@ -237,6 +258,15 @@ const cases = [
     name: "evaluate-ast/runtime-member-revalidation-16x1000",
     execute: () => {
       evaluateRuntimeMembers(runtimeMember16x1k);
+    },
+  },
+  {
+    name: "evaluate-ast/prepared-environment-16x1000",
+    execute: () => {
+      evaluateRuntimeMembersWithEnv(
+        runtimeMember16x1k,
+        preparedRuntimeMember16x1k,
+      );
     },
   },
   {

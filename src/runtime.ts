@@ -62,6 +62,7 @@ const weakSetAdd = WeakSet.prototype.add;
 const weakMapGet = WeakMap.prototype.get;
 const weakMapSet = WeakMap.prototype.set;
 const reflectApply = Reflect.apply;
+const objectFreeze = Object.freeze;
 
 const seenSetHas = (set: WeakSet<object>, value: object): boolean =>
   reflectApply(weakSetHas, set, [value]);
@@ -83,12 +84,18 @@ const seenMapSet = (
   reflectApply(weakMapSet, map, [value, normalized]);
 };
 
-type TraversalOk = Readonly<{ ok: true; value: RuntimeValue }>;
+type TraversalOk = Readonly<{
+  ok: true;
+  value: RuntimeValue;
+  maxDepth: number;
+  entries: number;
+}>;
 type TraversalErr = Readonly<{ ok: false; message: string }>;
 type TraversalResult = TraversalOk | TraversalErr;
 
 type TraversalBaseState = {
   entries: number;
+  maxDepth: number;
   readonly limits: RuntimeValueLimits;
 };
 
@@ -98,6 +105,7 @@ type TraversalState = TraversalBaseState &
     | Readonly<{
         mode: "normalize";
         seen: WeakMap<object, RuntimeValue>;
+        containers: WeakSet<object> | undefined;
       }>
   );
 
@@ -235,6 +243,7 @@ const traverseRuntimeValue = (
       if (currentDepth > state.limits.maxDepth) {
         return traversalError(currentPath, "exceeds the runtime depth limit");
       }
+      if (currentDepth > state.maxDepth) state.maxDepth = currentDepth;
       if (typeof currentValue !== "object") {
         return traversalError(currentPath, "is not a supported runtime value");
       }
@@ -278,6 +287,9 @@ const traverseRuntimeValue = (
               [{ length }],
             );
             seenMapSet(state.seen, currentValue, output);
+            if (state.containers !== undefined) {
+              seenSetAdd(state.containers, output);
+            }
             topFrame = {
               kind: "array",
               mode: "normalize",
@@ -314,6 +326,9 @@ const traverseRuntimeValue = (
           if (state.mode === "normalize") {
             output = objectCreate(null) as MutableRuntimeObject;
             seenMapSet(state.seen, currentValue, output);
+            if (state.containers !== undefined) {
+              seenSetAdd(state.containers, output);
+            }
           }
 
           const descriptors = Object.getOwnPropertyDescriptors(currentValue);
@@ -362,6 +377,9 @@ const traverseRuntimeValue = (
         if (frame.index >= frame.length) {
           topFrame = frame.previous;
           if (frame.mode === "normalize") {
+            if (state.mode === "normalize" && state.containers !== undefined) {
+              objectFreeze(frame.output);
+            }
             assignNormalized(frame.target, frame.output);
           }
           continue;
@@ -409,6 +427,9 @@ const traverseRuntimeValue = (
       if (frame.index >= frame.entries.length) {
         topFrame = frame.previous;
         if (frame.mode === "normalize") {
+          if (state.mode === "normalize" && state.containers !== undefined) {
+            objectFreeze(frame.output);
+          }
           assignNormalized(frame.target, frame.output);
         }
         continue;
@@ -464,6 +485,8 @@ const traverseRuntimeValue = (
       return {
         ok: true,
         value: state.mode === "validate" ? (value as RuntimeValue) : normalized,
+        maxDepth: state.maxDepth,
+        entries: state.entries,
       };
     }
   }
@@ -476,6 +499,7 @@ export const isRuntimeValue = (
   try {
     return traverseRuntimeValue(value, "value", 0, {
       entries: 0,
+      maxDepth: 0,
       limits,
       mode: "validate",
       seen: new WeakSetConstructor(),
@@ -485,6 +509,13 @@ export const isRuntimeValue = (
   }
 };
 
+type NormalizedEnvironment = Readonly<{
+  env: Env;
+  maxDepth: number;
+  entries: number;
+  containers: WeakSet<object> | undefined;
+}>;
+
 export const normalizeRuntimeValue = (
   value: unknown,
   limits: RuntimeValueLimits = { maxDepth: 64, maxEntries: 10_000 },
@@ -492,20 +523,33 @@ export const normalizeRuntimeValue = (
   try {
     return traverseRuntimeValue(value, "value", 0, {
       entries: 0,
+      maxDepth: 0,
       limits,
       mode: "normalize",
       seen: new WeakMapConstructor(),
+      containers: undefined,
     });
   } catch {
     return { ok: false, message: "value inspection failed" };
   }
 };
 
-export const normalizeEnv = (
+const normalizeEnvironment = (
   env: unknown,
-  limits: RuntimeValueLimits = { maxDepth: 64, maxEntries: 10_000 },
-): { ok: true; env: Env } | { ok: false; message: string } => {
-  if (env === undefined) return { ok: true, env: {} };
+  limits: RuntimeValueLimits,
+  freeze: boolean,
+): { ok: true; value: NormalizedEnvironment } | TraversalErr => {
+  if (env === undefined) {
+    return {
+      ok: true,
+      value: {
+        env: {},
+        maxDepth: 0,
+        entries: 0,
+        containers: undefined,
+      },
+    };
+  }
   try {
     if (!isPlainObject(env)) {
       return {
@@ -514,18 +558,71 @@ export const normalizeEnv = (
       };
     }
 
+    const containers = freeze ? new WeakSetConstructor<object>() : undefined;
     const normalized = traverseRuntimeValue(env, "env", 0, {
       entries: 0,
+      maxDepth: 0,
       limits,
       mode: "normalize",
       seen: new WeakMapConstructor(),
+      containers,
     });
     if (!normalized.ok) return normalized;
-    return { ok: true, env: normalized.value as Env };
+    return {
+      ok: true,
+      value: {
+        env: normalized.value as Env,
+        maxDepth: normalized.maxDepth,
+        entries: normalized.entries,
+        containers,
+      },
+    };
   } catch {
     return {
       ok: false,
       message: "environment inspection failed",
     };
   }
+};
+
+export const normalizeEnv = (
+  env: unknown,
+  limits: RuntimeValueLimits = { maxDepth: 64, maxEntries: 10_000 },
+): { ok: true; env: Env } | TraversalErr => {
+  const normalized = normalizeEnvironment(env, limits, false);
+  if (!normalized.ok) return normalized;
+  return { ok: true, env: normalized.value.env };
+};
+
+export const prepareEnv = (
+  env: unknown,
+  limits: RuntimeValueLimits,
+):
+  | Readonly<{
+      ok: true;
+      env: Env;
+      maxDepth: number;
+      entries: number;
+      containers: WeakSet<object>;
+    }>
+  | TraversalErr => {
+  if (env === undefined) {
+    return {
+      ok: false,
+      message: "env must be a plain object (or proto-null object)",
+    };
+  }
+  const normalized = normalizeEnvironment(env, limits, true);
+  if (!normalized.ok) return normalized;
+  const containers = normalized.value.containers;
+  if (containers === undefined) {
+    throw new Error("prepared environment container set is missing");
+  }
+  return {
+    ok: true,
+    env: normalized.value.env,
+    maxDepth: normalized.value.maxDepth,
+    entries: normalized.value.entries,
+    containers,
+  };
 };

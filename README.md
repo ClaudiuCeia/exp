@@ -327,6 +327,43 @@ The object model is intentionally limited:
 `user.name.toLowerCase()` is not supported because string prototype methods are
 not exposed. Use `std.lower(user.name)` instead.
 
+### Reusing an environment
+
+Use `prepareEnvironment()` when several evaluations share stable input data. It
+validates and normalizes the graph once, then returns an opaque snapshot that
+can be passed through the existing `env` option:
+
+```ts
+import { evaluateExpression, prepareEnvironment } from "@claudiu-ceia/exp";
+
+const env = prepareEnvironment({
+  account: { plan: "pro" },
+  usage: { requests: 1400 },
+});
+
+const plan = evaluateExpression('account.plan == "pro"', {
+  env,
+  throwOnError: false,
+});
+const usage = evaluateExpression("usage.requests >= 1000", {
+  env,
+  throwOnError: false,
+});
+```
+
+Prepared arrays and objects are library-owned, deeply frozen snapshots. Later
+changes to the input do not affect them, and host functions receive frozen
+containers when expressions pass snapshot data as arguments or receivers. Host
+functions themselves retain their identity and closure state, and their return
+values are still validated after every call.
+
+A prepared environment is tied to the package module instance that created it.
+Do not serialize, clone, or transfer it across workers, realms, or duplicate
+package instances. A cloned token carries no bindings and is not a prepared
+environment. Create the snapshot with the same `exp` import used for evaluation.
+`prepareEnvironment()` throws `ExpEvalError` when its limits or input are
+invalid.
+
 The fixed `std` namespace contains:
 
 ```text
@@ -423,8 +460,8 @@ from untrusted sources.
 | `maxDepth`          |     `256` | AST validation and interpreter recursion depth |
 | `maxArrayElements`  |   `1_000` | Elements in one array literal                  |
 | `maxCallArguments`  |   `1_000` | Arguments in one call expression               |
-| `maxRuntimeDepth`   |      `64` | Environment and function-return graph depth    |
-| `maxRuntimeEntries` |  `10_000` | Environment and function-return graph entries  |
+| `maxRuntimeDepth`   |      `64` | Environment/preparation and return graph depth |
+| `maxRuntimeEntries` |  `10_000` | Environment/preparation and return entries     |
 
 The `maxNestingDepth` preflight scans the source once. Delimiters and
 conditional markers inside strings and comments do not count toward the limit.
@@ -441,6 +478,12 @@ and call-argument lengths are checked before their entries are traversed. These
 limits do not bound every individual operation, string size, numeric magnitude,
 or work inside application-provided functions. They are not a timeout and do
 not interrupt a slow environment function.
+
+`prepareEnvironment()` accepts `maxRuntimeDepth` and `maxRuntimeEntries` with
+the same defaults and validation. A later evaluation rejects the snapshot in
+constant time when its configured limit is below the graph requirement recorded
+during preparation. The evaluation limits continue to apply independently to
+every host-function return value.
 
 Before a successful value crosses the API boundary, container results are
 validated and copied once more. That pass uses a saturating combination of the
@@ -464,6 +507,7 @@ for upgrade guidance and the compatibility areas to review.
 
 ```text
 parseExpression(input, options?)
+prepareEnvironment(environment, options?)
 evaluateExpression(input, options?)
 evaluateAst(expression, options?)
 formatDiagnosticReport(input, error)

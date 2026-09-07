@@ -33,6 +33,9 @@ export {
   evaluateExpression,
   type EvaluateExpressionOptions,
   ExpEvalError,
+  prepareEnvironment,
+  type PreparedEnvironment,
+  type PrepareEnvironmentOptions,
 } from "./src/eval.ts";
 export type {
   RuntimeArray,
