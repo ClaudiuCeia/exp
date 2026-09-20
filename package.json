@@ -1,6 +1,6 @@
 {
   "name": "@claudiu-ceia/exp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "TypeScript expression parser and evaluator for application-defined filters, conditions, and formulas.",
   "keywords": [
     "bun",
